@@ -263,6 +263,32 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 | 视觉 | 同存档同界面截图 + Python 逐像素 diff（差异只允许在墨迹内） |
 | 度量 | 日志对比 `GetTextDimension` 返回值（`Metrics=game` 下应完全一致） |
 
+### 8.1 离线真实文本对照（`render_strings.bat`，不需要启动游戏）
+
+从 M0 日志里取出游戏**真正画过的字符串**（按出现次数排序），逐字符走**真正的接管路径**
+（`Takeover::TryBlit` + 合成 BitFont + 真实 game.fnt 表），每串画两行写进合成 16 位表面：
+上行 = 原版点阵字形，下行 = 我们的矢量子形。最近一次结果：
+
+```
+[*] log      : VectorText.log (8098 lines, 2017 distinct strings)
+[*] rendered : 40 strings, 717 characters
+[*] takeover : drawn=700 (97.63%)  refused=16 (2.23%)
+[!] 没有 game.fnt 字形的字符：只有 U+000A（换行）—— 引擎从不把换行交给 Blit，实战中应为 0
+[!] 矢量字体缺字形的字符：none
+```
+
+对照图见 [strings-real-top.png](strings-real-top.png)（上=原版，下=矢量）：位置与步进逐像素一致，
+拉丁为衬线体、中文笔画更干净 —— 这在**真实游戏文本**上验证了 A2（位置一致）与 A4（度量一致）。
+
+### 8.2 游戏内对照（需要你跑一局）
+
+```bat
+python tools\screenshot_diff.py before.png after.png --regions --out diff.png
+```
+
+`before.png` = `Mode=observe` 的同界面截图，`after.png` = `Mode=draw` 的。差异应只落在字形墨迹内部；
+脚本会给出差异像素比例、最大通道差、以及合并后的差异区域框。
+
 ---
 
 ## 9. 任务拆解
