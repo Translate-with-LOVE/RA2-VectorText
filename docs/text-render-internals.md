@@ -71,13 +71,37 @@ BitFont::GetTextDimension    0x433CF0   测量（esp+4=文本, +8=w, +0xC=h, +0x
 * 颜色在函数退出时恢复为进入时的值（`mov %bx,0x24(%edi)`）。
 * 特殊字符 TAB（`0x09`）在 `Blit` 里处理：`X' = X + tabW - ((X + tabW - originX) % tabW)`。
 
-## 5. 仍未确认（M1.3 之前补齐）
+## 5. 阴影/描边与调用者地图（Q3 已解决）
 
-| 项 | 说明 | 计划 |
-|---|---|---|
-| Q3 阴影/描边 | `Blit` 只写一种颜色，`+0x26` 不被读 → 阴影应是**调用者再画一遍**（偏移+暗色），或由 `BitText::DrawText` 内部完成 | 反汇编 `0x434CD0`（10 参数富路径）与消息/提示调用点 |
-| Q4b `DrawText` 的换行/对齐 | `0x434CD0` 有 10 个栈参数（含颜色/对齐），多行文本（含 `\n` 的字符串）应该走它 | 同上 |
-| Q5 旁路路径 | `0x434E00–0x435000` 有函数调用 `GetCharacterBitmap`(0x4346C0)，疑似描边路径 | 找入口与调用者，纳入 LEAK 清单 |
+用 `tools/find_callers.py` 扫描全部 `call rel32`，得到文字绘制的完整调用关系：
+
+```
+BitFont::Blit (0x434120)  ← 5 个调用者
+    0x434648  BitFont::DrawString（字符串循环）
+    0x434B72  BitText::Print 内部（单字符路径）
+    0x434EA1  ┐
+    0x434FDC  ├ 0x434E00–0x435360 内三个"富路径"变体（都是 ret 0x28 = 10 参数）
+    0x4352B5  ┘
+
+BitFont::DrawString (0x434500) ← 4 个调用者
+    0x434BCA  BitText::Print
+    0x434C40  ┐ 同一个函数（0x434BF0, ret 0x18）：**两次绘制**
+    0x434C6E  ┘   Lock/SetX/DrawString/UnLock 各做一遍，两次 X 原点不同
+    0x434CB9  单遍变体（0x434C8D 起）
+
+BitText::Print (0x434B90) ← 3 个调用者：0x4A5FED(Drawing::PrintUnicode)、0x621384、0x6D5013
+```
+
+结论：
+
+* **`BitFont::Blit` 内部不画阴影**：它只读 `+0x0C`（缓冲）与 `+0x10`（pitch），
+  连 `+0x26`（第二颜色）、`+0x2C`、`+0x40` 都不读。
+* 阴影/重描效果来自**调用者把 `DrawString` 跑多遍**（例如 0x434BF0 那个函数：
+  读 `BitFont+0x40` 作为开关，置 `BitFont+0x2C = 2`，然后 Lock→SetX→DrawString→UnLock 两遍）。
+* 因为每一遍最终都走 `BitFont::Blit`，**逐字形接管自动覆盖所有遍数**（阴影、描边、重描都一样），
+  颜色与偏移仍由引擎决定 —— 这正是选择逐字形接管的直接收益。
+* 新识别字段：`BitFont+0x40`（重复绘制开关）、`BitFont+0x2C`（该路径下被置 2）。
+* `BitFont::SetColor2`(0x433C80，写 +0x26) 在 gamemd 中**没有任何调用者** → 该字段是死字段。
 
 ## 6. M1.3 的实现配方（方案 B：自己写像素）
 
