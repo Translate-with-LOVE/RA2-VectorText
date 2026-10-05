@@ -1,4 +1,5 @@
 #include "Logger.h"
+#include "Takeover.h"
 #include "../include/YRAddresses.h"
 
 #include <stdio.h>
@@ -373,7 +374,9 @@ namespace vt
                 g_ready = true;
                 g_lastFlush = GetTickCount();
                 WriteLine("===================================================================");
-                WriteLine(" VectorText M0 -- observation only, no drawing behaviour is changed");
+                WriteLine(g_cfgMode == Cfg::Mode_Draw
+                    ? " VectorText M1 -- vector text takeover ACTIVE (Mode=draw)"
+                    : " VectorText M1 -- observation only, no drawing behaviour is changed");
                 WriteLine(Format(" log=%s%s  enabled=%d detailed=%d blitDetails=%d maxUnique=%d flush=%ums",
                                  g_dir, g_logName, (int)g_enabled, (int)g_detailed,
                                  (int)g_blitDetail, g_maxUnique, (unsigned)g_flushMs));
@@ -391,6 +394,13 @@ namespace vt
                 return;
             EnterCriticalSection(&g_cs);
             WriteSummary(true);
+            if (g_cfgMode == Cfg::Mode_Draw)
+            {
+                unsigned long long drawn = 0, skipped = 0, failed = 0, unknown = 0;
+                Takeover::Stats(&drawn, &skipped, &failed, &unknown);
+                WriteLine(Format(" M1 takeover: drawn=%llu skipped=%llu failed=%llu unknownGlyph=%llu",
+                                 drawn, skipped, failed, unknown));
+            }
             if (g_file != INVALID_HANDLE_VALUE)
             {
                 CloseHandle(g_file);
