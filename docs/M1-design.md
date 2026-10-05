@@ -172,15 +172,20 @@ M2 只需要：把 `PixelWriter` 的目标从 8bpp surface 换成 32 位呈现�
 | Pillow | 已安装（**自带 FreeType**）→ 可离线做光栅化对照实验，不必先编译任何东西 |
 | fontTools | 未安装（M3 做字形子集化时再装） |
 
-### 6.2 游戏内光栅化器：FreeType 静态编进 DLL
+### 6.2 游戏内光栅化器：FreeType 静态编进 DLL（**已构建并验证**）
 
-* 来源：FreeType 2.13.x 源码，`third_party/freetype/`（只保留 `include/` 与需要的 `src/*.c`）。
-* 编法：MSVC 的"单目标文件"模式（`ftbase.c`/`ftsystem.c`/`ftinit.c`/`ftdebug.c` + `truetype.c`/
-  `sfnt.c`/`smooth.c`/`raster.c`/`autofit.c`/`psnames.c`/`cff.c`），32 位静态链接，无运行时依赖。
-* 需要的能力：`FT_Load_Char`（`FT_LOAD_TARGET_MONO` 做 1bpp、`FT_LOAD_TARGET_NORMAL` 拿灰度供 M2）、
-  `FT_Set_Pixel_Sizes`、可变字体的默认实例（必要时 `FT_Set_Var_Design_Coordinates` 选字重）。
-* 备选（仅供 M1 快速验证）：先用 GDI `GetGlyphOutlineW`（零依赖）跑通接管与写入，再换 FreeType。
-  两者接口相同（都产出覆盖率位图），切换成本低 —— **是否要这层中间步骤由你定**。
+* 来源：`third_party/freetype` git submodule，pin 在 **VER-2-14-3**（commit `0a0221a`）。
+* 构建：`third_party/build_freetype.bat` → `build/freetype/freetype.lib`（约 690 KB）。
+  采用 FreeType 的“单目标文件”构建，模块表 `third_party/ftmodule.min.h` 只注册
+  `autofit / tt / sfnt / psnames / smooth / raster1`（不含 CFF/Type1/SDF/SVG），
+  通过 `-DFT_CONFIG_MODULES_H="ftmodule.min.h"` 生效。
+* 验证：`ft_smoke.bat --size 13 --wght 400` 已跑通 —— FreeType 2.14.3（32 位静态），
+  Noto Serif SC 31058 字形，mono(1bpp) 与 coverage(8bpp) 两种渲染都正常。
+* **可变字体**：该字体默认实例是 ExtraLight(`wght=200`)，M1 必须显式设置 `wght=400`
+  （`FT_Set_Var_Design_Coordinates`），否则笔画过细。
+* 13px 实测度量：`U+4E2D` advance=13、mono 点阵 11×12、`U+0041` advance=9 ——
+  与原版 `game.fnt`（CJK 步进 13–15、墨迹约 9–11 行）吻合，**字号取 13 是合适的**。
+* 备选（若想先零依赖验证）：GDI `GetGlyphOutlineW`，接口相同（都产出覆盖率位图），切换成本低。
 
 ### 6.3 字体打包
 
@@ -245,7 +250,7 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 | surface 位深/格式假设错误 | 花屏或崩溃 | M1.0 探测 + 未知格式一律回退；写入前做边界检查 |
 | 跳过函数栈清理错误 | 立即崩溃 | 先 observe 后 draw；`selftest` 覆盖两种模式 |
 | `W/H` 居中/裁剪规则复刻不全 | 局部文字位置偏移 | 以简报屏/属性面板/消息框三类界面做逐像素对照 |
-| 可变字体（VF）在 FreeType 下的实例选择 | 字重不对 | 显式设置设计坐标或改用静态实例（Pillow 先离线验证字形） |
+| 可变字体（VF）在 FreeType 下的实例选择 | 字重不对 | **已确认并解决**：默认是 ExtraLight(200)，M1 显式设 `wght=400`；`ft_smoke.bat` 可复核 |
 | 24 MB 字体 + 每帧光栅化 | 启动慢/掉帧 | 字形缓存 + 只缓存用到的码位；M3 子集化 |
 | 旁路文本（Q5、MSOFont/得分屏 SHP 字体） | 部分文字仍点阵 | M1 不接管 SHP 字体；用 `LEAK` 输出清单，按需追加接管点 |
 

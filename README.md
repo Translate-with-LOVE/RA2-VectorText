@@ -30,6 +30,7 @@ F:\Mental Omega\VectorText\
 ├─ build.bat              # 一键构建（自动查找 vcvars32）
 ├─ selftest.bat           # 离线自检：加载 DLL 并调用全部钩子，不启动游戏
 ├─ run_game.bat           # 用 Syringe 直接启动游戏（等价于 MO 启动器的启动方式）
+├─ ft_smoke.bat           # 构建并运行 FreeType 冒烟测试（32 位静态链接）
 ├─ VectorText.ini         # 配置（build 时复制到游戏根目录）
 ├─ include\
 │   ├─ SyringeABI.h       # Syringe 钩子 ABI（REGISTERS / declhook / DEFINE_HOOK / 握手结构）
@@ -40,12 +41,36 @@ F:\Mental Omega\VectorText\
 │   └─ DllMain.cpp        # 入口 + SyringeHandshake
 ├─ docs\
 │   └─ M1-design.md       # M1 设计文档：接管点、跳过函数做法、像素写入方案、度量对齐、验证与风险
+├─ third_party\
+│   ├─ build_freetype.bat # 静态构建 32 位 FreeType -> build\freetype\freetype.lib
+│   ├─ ftmodule.min.h     # 最小模块表（只编 TrueType + autofit + mono/smooth 光栅化器）
+│   └─ freetype\          # git submodule: github.com/freetype/freetype @ VER-2-14-3
 └─ tools\
-    ├─ find_vcvars.bat    # 工具链定位（build/selftest 共用）
+    ├─ find_vcvars.bat    # 工具链定位（各脚本共用）
     ├─ selftest.cpp       # 自检程序：合成 REGISTERS 直接调用钩子处理函数
+    ├─ ft_smoke.cpp       # FreeType 冒烟测试：字形点阵、覆盖率、度量、可变字重
     ├─ verify_dll.py      # 不启动游戏就能校验 DLL 的钩子表是否正确
-    └─ analyze_log.py     # 把 VectorText.log 变成覆盖率/调用点/签名报告
+    ├─ analyze_log.py     # 把 VectorText.log 变成覆盖率/调用点/签名报告
+    └─ font_preview.py    # game.fnt 与矢量字体的对照图 / 宽度量化对比
 ```
+
+## 3b. FreeType 子模块（M1 用）
+
+```bat
+git submodule update --init --recursive          :: 拉取 third_party/freetype (VER-2-14-3)
+F:\Mental Omega\VectorText\third_party\build_freetype.bat   :: -> build\freetype\freetype.lib
+F:\Mental Omega\VectorText\ft_smoke.bat --size 13 --wght 400 :: 冒烟测试
+```
+
+* 采用 FreeType 的“单目标文件”构建：只编 `TrueType + sfnt + autofit + psnames + smooth + raster1`
+  （模块表在 `third_party/ftmodule.min.h`，通过 `-DFT_CONFIG_MODULES_H` 指定），产物约 690 KB，静态链接、无运行时依赖。
+* 已实测：FreeType **2.14.3**，32 位，Noto Serif SC 可渲染中英文；`U+4E2D` 在 13px 下
+  advance=13、点阵 11×12 —— 与原版 `game.fnt` 的 CJK 步进（13–15）吻合，确认 13px 是合适的字号。
+* **可变字体陷阱**：`NotoSerifSC-VF.ttf` 的默认实例是 **ExtraLight (wght=200)**，直接渲染会细得没法看；
+  必须 `FT_Set_Var_Design_Coordinates(wght=400)`（或选名为 Regular 的 named instance）。
+* 本机 Git 默认走 schannel，在受限 shell 里会报 `SEC_E_NO_CREDENTIALS`；
+  用 `git -c http.sslBackend=openssl ...` 即可（仓库本地已写入该配置）。
+* `git submodule` 子命令会调用 MSYS 的 `sh.exe`，在受限 shell 中会失败；clone/commit 本身正常。
 
 构建产物直接落在游戏根目录：`VectorText.dll`、`VectorText.ini`（Syringe 在工作目录里扫描 DLL）。
 
