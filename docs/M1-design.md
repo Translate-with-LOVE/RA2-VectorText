@@ -259,7 +259,7 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 |---|---|---|---|
 | M1.0 | surface 探测（Lock/UnLock + 字段快照），回答 Q1 | surface 清单与像素格式表 | ½ 天 |
 | M1.1 | 反汇编绘制核心 0x434500 + `Blit`，回答 Q2/Q3/Q4/Q5 | **✅ 已完成（Q3/Q5 部分）** → [text-render-internals.md](text-render-internals.md) | 1–1.5 天 |
-| M1.2 | FreeType 接入（源码 + 单目标文件构建）+ 字形缓存 + Noto Serif SC | `src/Rasterizer.*`、`src/GlyphCache.*`、`third_party/freetype` | 1.5–2 天 |
+| M1.2 | FreeType 接入（源码 + 单目标文件构建）+ 字形缓存 + Noto Serif SC | **✅ 已完成**：`src/GlyphSource.*`、`src/PixelWriter.*`、`third_party/freetype`（已静态链入 DLL，447 KB），离线比对见 §6.4 | 1.5–2 天 |
 | M1.3 | 接管与写入：跳过 Print/DrawText、复刻排版、PixelWriter（含阴影遍）、FALLBACK/LEAK | `src/Takeover.*`、`src/PixelWriter.*` | 2 天 |
 | M1.4 | 验证：离线对照、截图 diff、覆盖率与度量对照；修 Q5 旁路 | `tools/screenshot_diff.py`、M1 报告 | 1 天 |
 

@@ -32,6 +32,7 @@ F:\Mental Omega\VectorText\
 ├─ run_game.bat           # 用 Syringe 直接启动游戏（等价于 MO 启动器的启动方式）
 ├─ ft_smoke.bat           # 构建并运行 FreeType 冒烟测试（32 位静态链接）
 ├─ glyph_test.bat         # 字形对齐测试：game.fnt 原字形 vs 我们的矢量子形
+├─ pixel_test.bat         # 像素写入器离线测试（合成 16 位表面 + BMP 输出）
 ├─ VectorText.ini         # 配置（build 时复制到游戏根目录）
 ├─ include\
 │   ├─ SyringeABI.h       # Syringe 钩子 ABI（REGISTERS / declhook / DEFINE_HOOK / 握手结构）
