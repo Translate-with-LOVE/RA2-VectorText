@@ -35,6 +35,7 @@ F:\Mental Omega\VectorText\
 ├─ pixel_test.bat         # 像素写入器离线测试（合成 16 位表面 + BMP 输出）
 ├─ takeover_test.bat      # 接管路径离线验证（合成 BitFont + 真实 game.fnt 表，8 项检查）
 ├─ render_strings.bat     # 用日志里的真实游戏字符串跑接管管线，出覆盖报告 + 对照图
+├─ hooktest_draw.bat      # 钩子胶水层测试（跳过被调函数 / ESP / EAX / 回退）
 ├─ VectorText.ini         # 配置（build 时复制到游戏根目录）
 ├─ include\
 │   ├─ SyringeABI.h       # Syringe 钩子 ABI（REGISTERS / declhook / DEFINE_HOOK / 握手结构）

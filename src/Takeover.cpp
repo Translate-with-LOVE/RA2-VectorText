@@ -64,6 +64,11 @@ namespace vt
 
         bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX)
         {
+            // lazy one-time font load; TryBlit is the only entry point the hook
+            // uses, so the init lives here (and nowhere else can forget it)
+            if (!g_tried)
+                Init();
+
             if (!bitFont || !g_ready)
                 return false;
 

@@ -280,7 +280,27 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 对照图见 [strings-real-top.png](strings-real-top.png)（上=原版，下=矢量）：位置与步进逐像素一致，
 拉丁为衬线体、中文笔画更干净 —— 这在**真实游戏文本**上验证了 A2（位置一致）与 A4（度量一致）。
 
-### 8.2 游戏内对照（需要你跑一局）
+### 8.2 钩子胶水层（`hooktest_draw.bat`，draw/observe 两种模式）
+
+`takeover_test` 验证的是 `TryBlit` 本身；这一层验证**导出的钩子处理函数在 Syringe 调用约定下**的行为
+（合成 REGISTERS + 合成栈，ECX=BitFont，ESP 指向返回地址）：
+
+```
+1) 有字形的字符（U+4E2D）
+   [ ok ] returns the caller's return address (0x00401234)     ← 跳过被调函数
+   [ ok ] ESP popped return address + 4 args (…734 -> …748)     ← ret 0x10
+   [ ok ] EAX = new pen X (8 + 12 = 20)                         ← 引擎约定的返回值
+   [ ok ] pixels written into the locked surface (68)
+2) game.fnt 无字形的字符 / 3) 表面未锁定 → 返回 0 且 ESP 不变（逐字节回退）
+4) 显式颜色参数 → 真的写进表面
+observe 模式：返回 0、ESP 不变、零像素写入
+```
+
+> 这个测试抓到了一个真实缺陷：`Takeover::Init()` 当时**从未被调用**，`g_ready` 永远是 false，
+> 于是 draw 模式下所有字形都会静默回退成点阵（不崩溃、但毫无效果）。已改为在 `TryBlit` 内部
+> 首次调用时惰性初始化，并由本测试长期看护。
+
+### 8.3 游戏内对照（需要你跑一局）
 
 ```bat
 python tools\screenshot_diff.py before.png after.png --regions --out diff.png
