@@ -59,13 +59,13 @@ M1 **不做**：抗锯齿（8bpp 调色板装不下）、亚像素定位、32 �
 
 ### 2.3 选方案 B 后新增的必查项
 
-| 编号 | 待确认 | 影响 | 手段 |
-|---|---|---|---|
-| Q1 | 每个 surface 的像素格式：位深、pitch、锁定缓冲、调色板 | 决定像素写入器 | M1.0 探测钩子（Lock/UnLock 时快照 `DSurface` 字段） |
-| Q2 | 文字颜色的来源与语义：`Print` 无颜色参数 → 颜色应在 `BitFont+0x24`（已见 `mov %ax,0x24(%edi)`）；`DrawText` 的颜色/对齐在后几个参数 | 决定我们写什么值 | 反汇编 + 运行期改值对照 |
-| Q3 | 阴影/描边的实现：偏移量与颜色如何得出（`TextPrintType` 标志位） | A3 的关键 | 反汇编 `BitFont::Blit`(0x434120) 与 `BitText` 绘制核心(0x434500) |
-| Q4 | 排版规则：逐字符推进、空格换行、W/H 居中与裁剪 | 我们必须自己实现（原版在 Print 内部做） | 反汇编 0x434500 及其调用链 |
-| Q5 | 旁路路径：0x434E00–0x435000 区间调用 `GetCharacterBitmap`(0x4346C0) 的辅助函数是什么 | A5 漏检清单 | 找函数入口与调用者 |
+| 编号 | 待确认 | 状态 |
+|---|---|---|
+| Q1 | surface 像素格式：位深、pitch、锁定缓冲 | **✅ 已解决**：文字表面是 **16 位色**，颜色字直接写入；缓冲=`BitFont+0x0C`、pitch(像素)=`BitFont+0x10`，`dst = base + (pitch·y + x)·2`（两条独立路径互证）。详见 [text-render-internals.md](text-render-internals.md) §3 |
+| Q2 | 颜色来源与语义 | **✅ 已解决**：`Blit` 的 arg4（`-1` 表示用 `BitFont+0x24`）；`DrawString` 在 `reveal∈[1..8]` 时逐字符向白混合 `ratio=((9-reveal)*31+31i)&0xFF`。详见 §4 |
+| Q3 | 阴影/描边的实现 | **⏳ 部分**：`Blit` 只写一种颜色、不读 `+0x26` → 阴影应是调用者再画一遍或 `DrawText` 内部完成 |
+| Q4 | 排版规则（推进/换行/居中/裁剪） | **✅ 主体已解决**：`DrawString(str,X,Y,maxChars,reveal)`，advance=字形宽度字节；`\r\n` 只跳过、不换行（换行由调用者或 `DrawText` 负责）；返回结束 X。`DrawText` 的 10 参数细节待补 |
+| Q5 | 旁路路径（`0x434E00–0x435000` 调用 `GetCharacterBitmap`） | **⏳ 待办**：影响 A5 漏检清单 |
 
 ---
 
@@ -233,7 +233,7 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 | 阶段 | 内容 | 产出 | 预估 |
 |---|---|---|---|
 | M1.0 | surface 探测（Lock/UnLock + 字段快照），回答 Q1 | surface 清单与像素格式表 | ½ 天 |
-| M1.1 | 反汇编绘制核心 0x434500 + `Blit`，回答 Q2/Q3/Q4/Q5 | `docs/text-render-internals.md`：颜色/阴影/排版规则 | 1–1.5 天 |
+| M1.1 | 反汇编绘制核心 0x434500 + `Blit`，回答 Q2/Q3/Q4/Q5 | **✅ 已完成（Q3/Q5 部分）** → [text-render-internals.md](text-render-internals.md) | 1–1.5 天 |
 | M1.2 | FreeType 接入（源码 + 单目标文件构建）+ 字形缓存 + Noto Serif SC | `src/Rasterizer.*`、`src/GlyphCache.*`、`third_party/freetype` | 1.5–2 天 |
 | M1.3 | 接管与写入：跳过 Print/DrawText、复刻排版、PixelWriter（含阴影遍）、FALLBACK/LEAK | `src/Takeover.*`、`src/PixelWriter.*` | 2 天 |
 | M1.4 | 验证：离线对照、截图 diff、覆盖率与度量对照；修 Q5 旁路 | `tools/screenshot_diff.py`、M1 报告 | 1 天 |
