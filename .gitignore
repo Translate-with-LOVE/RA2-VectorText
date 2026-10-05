@@ -1,0 +1,17 @@
+# ---------------------------------------------------------------------------
+# VectorText workspace
+# ---------------------------------------------------------------------------
+
+# build outputs (build.bat / selftest.bat write here)
+build/
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+
+# logs / temporary outputs
+*.log
+*.tmp
+
+# NOTE: third_party/freetype is a git submodule (see .gitmodules)
