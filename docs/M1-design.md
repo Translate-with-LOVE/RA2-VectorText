@@ -69,28 +69,40 @@ M1 **不做**：抗锯齿（8bpp 调色板装不下）、亚像素定位、32 �
 
 ---
 
-## 3. 接管策略
+## 3. 接管策略（**已定案：逐字形接管 `BitFont::Blit`**）
 
-### 3.1 主接管点：字符串级 + 跳过原实现
+### 3.1 接管点：`BitFont::Blit`(0x434120)，每次一个字形
 
-在 `BitText::Print` / `BitText::DrawText` 入口跳过原实现，由我们完成：
-取参数 → 排版（Q4 规则）→ 光栅化 → 写像素（§4）。
+原设计打算在 `BitText::Print`/`DrawText` 层跳过整个函数、自己排版。**实测后改为逐字形接管**，
+原因是它把风险降到最低、同时完全满足"自写像素"：
 
-**跳过被调函数的确切做法（Syringe）：**
+| 维度 | 字符串级（原设计） | **逐字形（现方案）** |
+|---|---|---|
+| 排版/换行/对齐 | 必须自己复刻（Q4 规则只查清了一部分） | **继续由引擎算**，零漂移风险 |
+| 阴影/描边（Q3 未查清） | 必须自己复刻 | **继续由引擎做**（它自然会再调一次 Blit） |
+| 逐字颜色渐变（reveal） | 必须自己复刻 | **引擎已经算好**放进 `BitFont+0x24` |
+| surface 锁定 | 自己要调 `Lock`/`UnLock` | Lock 已由 `Print` 做过，**只读字段** |
+| 度量（Metrics=game） | 自己实现推进 | **返回原版宽度字节** ⇒ 天然一致 |
+| 覆盖率 | 只覆盖 Print/DrawText 两个入口 | 覆盖**所有**走 Blit 的调用者（含 DrawText、旁路、外部 DLL） |
 
+代价：不能改排版（没有 `Metrics=freetype`）、不能做连字/字距调整 —— 这些属于 M2/M3。
+收益：**16 位表面可以直接做抗锯齿**（读回目标像素做 alpha 混合），M1 就能拿到现代观感。
+
+**接管与回退的确切做法（Syringe）：**
+
+```cpp
+// 成功：自己画完，直接返回调用者的下一条指令
+DWORD retAddr = R->Stack32(0);          // 返回地址
+R->ESP(R->ESP() + 4 + 0x10);            // 弹返回地址 + 4 个栈参数（Blit: ret 0x10）
+R->EAX(newX);                           // 引擎约定：返回值 = 新的笔位 X
+return retAddr;                         // 跳过原实现
+
+// 任何不确定的情况（字体没加载、表面未锁定、字形不存在、异常）
+return 0;                               // 原实现照常执行，行为与 M0 完全一致
 ```
-retAddr = *(DWORD*)R->ESP();          // 返回地址
-R->ESP(R->ESP() + 4 + argBytes);      // 弹返回地址 + 弹全部参数
-R->EAX(原函数应有的返回值);             // Print/DrawText 的返回值语义先测后定
-return retAddr;                        // 回到调用者下一条指令
-```
 
-| 函数 | 栈参数 | argBytes | 依据 |
-|---|---|---|---|
-| `BitText::Print` | 7 | `0x1C` | 实测 `ret 0x1C` |
-| `BitText::DrawText` | 10 | `0x28` | 实测 `ret 0x28` |
-
-先以 `Mode=observe`（`return 0`，原版照画）跑通参数读取，再切 `Mode=draw`。
+`Takeover::TryBlit()` 的全部拒绝条件（都有离线测试覆盖）：字体未就绪、`InternalData` 为空、
+表面未锁定（`+0xC == 0`）、pitch ≤ 0、`SymbolTable[ch] == 0`、行数越界、FreeType 载入失败、异常。
 
 ### 3.2 兜底：`BitFont::Blit` 只做漏检
 
@@ -260,7 +272,7 @@ FallbackOnError=1       ; 任何异常/未知格式 → 回退原版并记 FALLB
 | M1.0 | surface 探测（Lock/UnLock + 字段快照），回答 Q1 | surface 清单与像素格式表 | ½ 天 |
 | M1.1 | 反汇编绘制核心 0x434500 + `Blit`，回答 Q2/Q3/Q4/Q5 | **✅ 已完成（Q3/Q5 部分）** → [text-render-internals.md](text-render-internals.md) | 1–1.5 天 |
 | M1.2 | FreeType 接入（源码 + 单目标文件构建）+ 字形缓存 + Noto Serif SC | **✅ 已完成**：`src/GlyphSource.*`、`src/PixelWriter.*`、`third_party/freetype`（已静态链入 DLL，447 KB），离线比对见 §6.4 | 1.5–2 天 |
-| M1.3 | 接管与写入：跳过 Print/DrawText、复刻排版、PixelWriter（含阴影遍）、FALLBACK/LEAK | `src/Takeover.*`、`src/PixelWriter.*` | 2 天 |
+| M1.3 | 接管与写入：逐字形接管 `BitFont::Blit`、`src/Takeover.*` + `src/PixelWriter.*`（含 AA 混合）、FALLBACK | **✅ 代码完成**：`takeover_test.bat` 7 项检查全过（布局/像素/颜色/AA/裁剪/未锁定/缺字形） | 2 天 |
 | M1.4 | 验证：离线对照、截图 diff、覆盖率与度量对照；修 Q5 旁路 | `tools/screenshot_diff.py`、M1 报告 | 1 天 |
 
 合计约 **6–8 个工作日**（方案 B 比方案 A 多约 1–2 天，换来 M2 的平滑过渡）。

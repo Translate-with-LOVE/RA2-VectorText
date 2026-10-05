@@ -38,6 +38,62 @@ namespace vt
         return written;
     }
 
+    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt)
+    {
+        if (coverage >= 255)
+            return src;
+        if (coverage <= 0)
+            return dst;
+
+        const int rMask = (1 << fmt.redBits) - 1;
+        const int gMask = (1 << fmt.greenBits) - 1;
+        const int bMask = (1 << fmt.blueBits) - 1;
+
+        const int dr = (dst >> fmt.redShift) & rMask, sr = (src >> fmt.redShift) & rMask;
+        const int dg = (dst >> fmt.greenShift) & gMask, sg = (src >> fmt.greenShift) & gMask;
+        const int db = (dst >> fmt.blueShift) & bMask, sb = (src >> fmt.blueShift) & bMask;
+
+        const int r = dr + ((sr - dr) * coverage) / 255;
+        const int g = dg + ((sg - dg) * coverage) / 255;
+        const int b = db + ((sb - db) * coverage) / 255;
+
+        return (unsigned short)((r << fmt.redShift) | (g << fmt.greenShift) | (b << fmt.blueShift));
+    }
+
+    int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
+                   unsigned short color, const ColorFormat& fmt)
+    {
+        if (!t.base || t.pitch <= 0 || cellLines <= 0)
+            return 0;
+
+        int written = 0;
+        for (int r = 0; r < cellLines; ++r)
+        {
+            const int sy = y + r;
+            if (sy < t.clipT || sy > t.clipB)
+                continue;
+
+            unsigned short* row = t.base + (size_t)t.pitch * sy;
+
+            for (int c = 0; c < 24; ++c)
+            {
+                const int sx = x + c;
+                if (sx < t.clipL)
+                    continue;
+                if (sx > t.clipR)
+                    break;
+
+                const int cov = cell.cov[r * 24 + c];
+                if (!cov)
+                    continue;
+
+                row[sx] = Blend(row[sx], color, cov, fmt);
+                ++written;
+            }
+        }
+        return written;
+    }
+
     unsigned short BlendTowardWhite(unsigned short color, int ratio, const ColorFormat& fmt)
     {
         ratio &= 0xFF;                                // the engine masks it too

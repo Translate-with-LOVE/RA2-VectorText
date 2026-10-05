@@ -29,6 +29,17 @@ namespace vt
         LONG64 g_calls[Hook_Count]        = { 0 };
         LONG64 g_lastReported[Hook_Count] = { 0 };
 
+        // ---- M1 rendering configuration -----------------------------------
+        int   g_cfgMode      = Cfg::Mode_Observe;
+        char  g_cfgFont[MAX_PATH] = "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf";
+        int   g_cfgWeight    = 400;
+        int   g_cfgSizeLatin = 13;
+        int   g_cfgSizeCJK   = 16;
+        int   g_cfgBaseline  = 13;
+        bool  g_cfgFit       = true;
+        bool  g_cfgAA        = true;
+        bool  g_cfgFallback  = true;
+
         struct Entry
         {
             unsigned long long count;
@@ -148,6 +159,29 @@ namespace vt
                 g_maxUnique = 16;
             if (g_flushMs < 250)
                 g_flushMs = 250;
+
+            // ---- M1 rendering configuration -------------------------------
+            char mode[32] = { 0 };
+            GetPrivateProfileStringA("VectorText", "Mode", "observe", mode, sizeof(mode), ini);
+            if      (!_stricmp(mode, "off"))     g_cfgMode = Cfg::Mode_Off;
+            else if (!_stricmp(mode, "draw"))    g_cfgMode = Cfg::Mode_Draw;
+            else                                 g_cfgMode = Cfg::Mode_Observe;
+
+            GetPrivateProfileStringA("VectorText", "FontFile",
+                                     "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf",
+                                     g_cfgFont, MAX_PATH, ini);
+            g_cfgWeight     = GetPrivateProfileIntA("VectorText", "FontWeight", 400, ini);
+            g_cfgSizeLatin  = GetPrivateProfileIntA("VectorText", "FontSizeLatin", 13, ini);
+            g_cfgSizeCJK    = GetPrivateProfileIntA("VectorText", "FontSizeCJK", 16, ini);
+            g_cfgBaseline   = GetPrivateProfileIntA("VectorText", "BaselineRow", 13, ini);
+            g_cfgFit        = GetPrivateProfileIntA("VectorText", "FitToAdvance", 1, ini) != 0;
+            g_cfgAA         = GetPrivateProfileIntA("VectorText", "AntiAlias", 1, ini) != 0;
+            g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
+
+            if (g_cfgSizeLatin < 6)  g_cfgSizeLatin = 6;
+            if (g_cfgSizeCJK < 6)    g_cfgSizeCJK = 6;
+            if (g_cfgBaseline < 1)   g_cfgBaseline = 1;
+            if (g_cfgBaseline > 32)  g_cfgBaseline = 32;
         }
 
         void OpenLogFile()
@@ -458,4 +492,43 @@ namespace vt
             FlushIfDue(false);
         }
     } // namespace Log
+
+    // ---------------------------------------------------------------- Cfg ---
+    // Lazily reads the same VectorText.ini the logger uses.  Every accessor
+    // goes through Init() so a call from a hook never touches the disk twice.
+    namespace Cfg
+    {
+        void Load()
+        {
+            Log::Init();
+        }
+
+        int Mode()               { Load(); return g_cfgMode; }
+        const char* FontFile()   { Load(); return g_cfgFont; }
+        int FontWeight()         { Load(); return g_cfgWeight; }
+        int FontSizeLatin()      { Load(); return g_cfgSizeLatin; }
+        int FontSizeCJK()        { Load(); return g_cfgSizeCJK; }
+        int BaselineRow()        { Load(); return g_cfgBaseline; }
+        bool FitToAdvance()      { Load(); return g_cfgFit; }
+        bool AntiAlias()         { Load(); return g_cfgAA; }
+        bool FallbackOnError()   { Load(); return g_cfgFallback; }
+
+        void ConfigStr(const char* key, const char* def, char* out, int cch)
+        {
+            char ini[MAX_PATH];
+            if (!g_dir[0])
+                GetGameDir();
+            _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
+            GetPrivateProfileStringA("VectorText", key, def, out, (DWORD)cch, ini);
+        }
+
+        int ConfigInt(const char* key, int def)
+        {
+            char ini[MAX_PATH];
+            if (!g_dir[0])
+                GetGameDir();
+            _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
+            return GetPrivateProfileIntA("VectorText", key, def, ini);
+        }
+    } // namespace Cfg
 } // namespace vt

@@ -38,7 +38,7 @@ cl /nologo /LD /MT /O2 /EHsc /std:c++17 /W4 ^
    /D SYR_VER=2 /D WIN32_LEAN_AND_MEAN /D _CRT_SECURE_NO_WARNINGS ^
    /I "..\include" /I "..\src" /I "..\third_party\freetype\include" ^
    ..\src\Logger.cpp ..\src\Hooks.cpp ..\src\DllMain.cpp ^
-   ..\src\GlyphSource.cpp ..\src\PixelWriter.cpp ^
+   ..\src\GlyphSource.cpp ..\src\PixelWriter.cpp ..\src\Takeover.cpp ^
    /Fe:"%OUT%" /Fd:"VectorText.pdb" ^
    /link /SUBSYSTEM:WINDOWS /MACHINE:X86 /INCREMENTAL:NO ^
    freetype\freetype.lib ^

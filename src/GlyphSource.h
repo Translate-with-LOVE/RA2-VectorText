@@ -19,6 +19,7 @@ namespace vt
     {
         unsigned char width;                 // engine advance (pixels)
         unsigned char bits[3 * 32];          // strideBytes * lines, <= 96 bytes
+        unsigned char cov[24 * 32];          // 8-bit coverage (only filled in AA mode)
     };
 
     class GlyphSource
@@ -44,6 +45,11 @@ namespace vt
         // CJK fills the whole 16-row cell.  Matching that needs two sizes.
         // cjkFrom defaults to U+2E80 (CJK radicals supplement).
         void SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom = 0x2E80);
+
+        // AA mode also fills GlyphCell::cov with 8-bit coverage, which lets the
+        // pixel writer blend into the game's 16-bit surfaces.
+        void SetAntiAlias(bool on) { m_aa = on; m_cache.clear(); }
+        bool AntiAlias() const { return m_aa; }
 
         bool Ready() const { return m_face != NULL; }
         void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
@@ -72,6 +78,7 @@ namespace vt
         int   m_lines;
         int   m_baseline;
         bool  m_fit;
+        bool  m_aa;
         std::map<unsigned int, GlyphCell> m_cache;
     };
 }

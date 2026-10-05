@@ -13,6 +13,8 @@
 #include "SyringeABI.h"
 #include "YRAddresses.h"
 #include "Logger.h"
+#include "Takeover.h"
+#include "PixelWriter.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -333,21 +335,55 @@ VT_DEFINE_HOOK(yra::BitText_DrawText, VT_Hook_BitText_DrawText, yra::BitText_Dra
 // ---------------------------------------------------------------------------
 // BitFont::Blit  @ 0x434120   (one call per glyph -- the real hot path)
 //   ECX = BitFont*, [esp+4]=wchar_t wch [esp+8]=X [esp+0xC]=Y [esp+0x10]=color
-//   Counters only by default.  LogBitFontBlitDetails=1 also records *which*
-//   characters are drawn, i.e. a glyph-usage list (useful for a vector font).
+//
+//   Mode=observe: counters only (LogBitFontBlitDetails=1 also records which
+//   characters are drawn).
+//   Mode=draw:    M1 takeover -- we rasterise the glyph with FreeType and write
+//   the pixels ourselves into the (already locked) 16-bit surface, then return
+//   the pen X the engine expects (X + the original advance).  Layout, wrapping,
+//   alignment, shadows and the per-character colour ramp all stay the engine's.
 // ---------------------------------------------------------------------------
 VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
 {
+    const unsigned int wch = R->Stack32(4) & 0xFFFFu;
+    const int x = (int)R->Stack32(8);
+    const int y = (int)R->Stack32(0xC);
+    const int color = (int)R->Stack32(0x10);
+
+    if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw && wch != 0)
+    {
+        int newX = x;
+        bool drawn = false;
+
+        __try
+        {
+            drawn = vt::Takeover::TryBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color, &newX);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            drawn = false;
+            vt::Log::Note("FALLBACK blit-exception wch=U+%04X x=%d y=%d", wch, x, y);
+        }
+
+        if (drawn)
+        {
+            vt::Log::Count(vt::Hook_BitFont_Blit);
+            const DWORD retAddr = (DWORD)R->Stack32(0);
+            R->ESP(R->ESP() + 4 + 0x10);        // pop return address + 4 arguments
+            R->EAX((DWORD)newX);
+            return retAddr;                     // skip the original implementation
+        }
+    }
+
     if (vt::Log::WantBlitDetails())
     {
-        const unsigned int wch = R->Stack32(4) & 0xFFFFu;
         wchar_t buf[4];
         buf[0] = (wchar_t)wch;
         buf[1] = 0;
 
         char extra[128];
         _snprintf_s(extra, sizeof(extra), _TRUNCATE, "X=%d Y=%d color=0x%04X",
-                    (int)R->Stack32(8), (int)R->Stack32(0xC), R->Stack32(0x10) & 0xFFFF);
+                    x, y, color & 0xFFFF);
         vt::Log::Call(vt::Hook_BitFont_Blit, (const void*)(uintptr_t)R->Stack32(0), buf, extra);
     }
     else

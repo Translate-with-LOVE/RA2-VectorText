@@ -33,6 +33,7 @@ F:\Mental Omega\VectorText\
 ├─ ft_smoke.bat           # 构建并运行 FreeType 冒烟测试（32 位静态链接）
 ├─ glyph_test.bat         # 字形对齐测试：game.fnt 原字形 vs 我们的矢量子形
 ├─ pixel_test.bat         # 像素写入器离线测试（合成 16 位表面 + BMP 输出）
+├─ takeover_test.bat      # 接管路径离线验证（合成 BitFont + 真实 game.fnt 表，7 项检查）
 ├─ VectorText.ini         # 配置（build 时复制到游戏根目录）
 ├─ include\
 │   ├─ SyringeABI.h       # Syringe 钩子 ABI（REGISTERS / declhook / DEFINE_HOOK / 握手结构）

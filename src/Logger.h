@@ -33,4 +33,23 @@ namespace vt
         void Miss(int hookId, const void* caller, const char* dump);   // no readable string
         void Note(const char* fmt, ...);   // free-form line
     }
+
+    // M1 configuration (VectorText.ini, read lazily in-process like the logger)
+    namespace Cfg
+    {
+        enum Mode { Mode_Off = 0, Mode_Observe = 1, Mode_Draw = 2 };
+
+        void Load();                       // idempotent; called by the first accessor
+        int  Mode();
+        const char* FontFile();
+        int  FontWeight();
+        int  FontSizeLatin();
+        int  FontSizeCJK();
+        int  BaselineRow();
+        bool FitToAdvance();
+        bool AntiAlias();
+        bool FallbackOnError();
+        int  ConfigInt(const char* key, int def);
+        void ConfigStr(const char* key, const char* def, char* out, int cch);
+    }
 }

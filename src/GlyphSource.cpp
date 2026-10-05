@@ -13,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_face(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u), m_currentSize(0),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true)
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false)
     {
     }
 
@@ -135,7 +135,10 @@ namespace vt
             m_currentSize = wantSize;
         }
 
-        if (FT_Load_Char(face, (FT_ULong)codepoint, FT_LOAD_TARGET_MONO | FT_LOAD_RENDER))
+        // AA mode rasterises 8-bit coverage and derives the 1bpp mask from it,
+        // so both paths stay consistent and only one glyph load is needed.
+        const FT_Int32 loadFlags = (m_aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
+        if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             return NULL;
 
         const FT_GlyphSlot g = face->glyph;
@@ -168,12 +171,13 @@ namespace vt
                         continue;
                     unsigned char* dst = cell.bits + y * m_stride + (x >> 3);
                     *dst |= (unsigned char)(0x80 >> (x & 7));
+                    cell.cov[y * 24 + x] = 255;
                 }
             }
         }
         else
         {
-            // grayscale fallback (should not happen with FT_LOAD_TARGET_MONO)
+            // 8-bit coverage (AA mode); the 1bpp mask is derived from it
             for (unsigned int r = 0; r < g->bitmap.rows; ++r)
             {
                 const int y = y0 + (int)r;
@@ -185,7 +189,11 @@ namespace vt
                     const int x = x0 + (int)c;
                     if (x < 0 || x >= m_stride * 8)
                         continue;
-                    if (src[c] < 128)
+                    const unsigned char cov = src[c];
+                    if (!cov)
+                        continue;
+                    cell.cov[y * 24 + x] = cov;
+                    if (cov < 128)
                         continue;
                     unsigned char* dst = cell.bits + y * m_stride + (x >> 3);
                     *dst |= (unsigned char)(0x80 >> (x & 7));
@@ -223,11 +231,15 @@ namespace vt
         const int inkW = maxX - minX + 1;
         const int dstW = advance;                // first `advance` columns are ours
         unsigned char tmp[3 * 32];
+        unsigned char tmpCov[24 * 32];
         memset(tmp, 0, sizeof(tmp));
+        memset(tmpCov, 0, sizeof(tmpCov));
 
         // OR-combine every source column that falls into a destination column.
         // (Plain nearest-column sampling silently drops one-pixel-wide strokes:
         // the vertical stem of U+4E2D sits in a single column that gets skipped.)
+        // Coverage keeps the maximum in the range, which is the visually right
+        // choice for downsampling antialiased text.
         for (int y = 0; y < lines; ++y)
         {
             for (int t = 0; t < dstW; ++t)
@@ -238,13 +250,15 @@ namespace vt
                 {
                     if (s < minX)
                         continue;
+                    if (cell.cov[y * 24 + s] > tmpCov[y * 24 + t])
+                        tmpCov[y * 24 + t] = cell.cov[y * 24 + s];
                     if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
                         continue;
                     tmp[y * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
-                    break;                        // one hit is enough for this column
                 }
             }
         }
         memcpy(cell.bits, tmp, sizeof(cell.bits));
+        memcpy(cell.cov, tmpCov, sizeof(cell.cov));
     }
 }

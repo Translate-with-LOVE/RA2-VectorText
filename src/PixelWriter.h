@@ -15,6 +15,16 @@
 
 namespace vt
 {
+    // Bit layout of the game's 16-bit surface colours (Drawing::RedShift* /
+    // GreenShift* / BlueShift* globals describe the same thing at run time).
+    struct ColorFormat
+    {
+        int redShift, redBits;
+        int greenShift, greenBits;
+        int blueShift, blueBits;
+    };
+    extern const ColorFormat RGB565;      // typical DirectDraw 16-bit layout
+
     struct Target
     {
         unsigned short* base;        // BitFont[+0x0C]
@@ -26,6 +36,13 @@ namespace vt
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color);
 
+    // Same, but blends using the cell's 8-bit coverage: dst = lerp(dst, color, cov).
+    // This is real antialiasing *inside the game's own 16-bit surface* -- the
+    // destination value is read back, so text composites correctly over
+    // whatever was drawn before it.
+    int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
+                   unsigned short color, const ColorFormat& fmt);
+
     // Draw a whole string with per-character advances taken from `advances`
     // (pass NULL to use each cell's own width). Returns the end pen X.
     // `reveal` reproduces the engine's per-character fade toward white:
@@ -34,15 +51,6 @@ namespace vt
                    const int* advances, int count, int x, int y, int cellLines,
                    unsigned short color, int reveal);
 
-    // Engine's colour ramp: blend `color` toward white by `ratio` (0..255),
-    // using the same bit layout as Drawing::RedShift* / GreenShift* / BlueShift*.
-    // Caller supplies the shift/mask description of the surface format.
-    struct ColorFormat
-    {
-        int redShift, redBits;
-        int greenShift, greenBits;
-        int blueShift, blueBits;
-    };
-    extern const ColorFormat RGB565;      // typical DirectDraw 16-bit layout
     unsigned short BlendTowardWhite(unsigned short color, int ratio, const ColorFormat& fmt);
+    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt);
 }

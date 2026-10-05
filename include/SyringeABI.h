@@ -60,6 +60,7 @@ struct REGISTERS
     void EBX(DWORD v) { ebx = v; }
     void ECX(DWORD v) { ecx = v; }
     void EDX(DWORD v) { edx = v; }
+    void ESP(DWORD v) { esp = v; }        // needed to skip a callee (pop args + ret)
 
     // Stack access relative to the ESP captured at the hook address.
     // At a function's first instruction ESP+0 is the return address and
