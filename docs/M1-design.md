@@ -185,6 +185,26 @@ M2 只需要：把 `PixelWriter` 的目标从 8bpp surface 换成 32 位呈现�
   （`FT_Set_Var_Design_Coordinates`），否则笔画过细。
 * 13px 实测度量：`U+4E2D` advance=13、mono 点阵 11×12、`U+0041` advance=9 ——
   与原版 `game.fnt`（CJK 步进 13–15、墨迹约 9–11 行）吻合，**字号取 13 是合适的**。
+
+### 6.4 字形对齐实测（`glyph_test.bat`，离线，不需要启动游戏）
+
+`src/GlyphSource.*` 把 FreeType 位图组织成**引擎自己的字形格**（首字节=advance，其后
+`stride×lines` 字节 1bpp、MSB 在前、1=墨），因此可以直接和 `game.fnt` 的原字形逐像素对比：
+
+| 字符 | game.fnt 行/列 | 我们（拉丁13 / 中文16，基线13） |
+|---|---|---|
+| `A` | 4..12 / 0..6 | 3..12 / 0..6（大写高 1 行） |
+| `a` | 6..12 / 0..4 | **6..12 / 0..4（完全一致）** |
+| `g` | 6..15 / 0..5 | **6..15 / 0..5（完全一致）** |
+| `中` | 0..15 / 0..11 | 0..13 / 0..11 |
+| `文` | 0..14 / 0..14 | 0..14 / 1..14 |
+| `电` `力` | 0..14、0..15 / 0..12 | 0..13 / 0..12 |
+
+结论：
+* **advance 全部与原版逐像素一致**（Metrics=game 用原版宽度字节），列宽都在步进内 → 相邻字形不会重叠；
+* 小写/数字基线与降部完全吻合；大写与 CJK 各差 1–2 行（观感可接受，M1.4 可继续微调）；
+* 两个坑已修：① 最近列采样压缩会**整根丢掉一像素宽的竖笔**（`中` 的竖笔），改成区间 OR 合并；
+  ② 该字体可变实例默认 ExtraLight，必须设 `wght=400`。
 * 备选（若想先零依赖验证）：GDI `GetGlyphOutlineW`，接口相同（都产出覆盖率位图），切换成本低。
 
 ### 6.3 字体打包
@@ -202,8 +222,13 @@ M2 只需要：把 `PixelWriter` 的目标从 8bpp surface 换成 32 位呈现�
 Mode=observe            ; off | observe（M0 行为）| draw（M1 接管）
 Metrics=game            ; game | freetype
 FontFile=C:\Windows\Fonts\NotoSerifSC-VF.ttf
-FontSize=13             ; 像素字号（实测：13px 时 CJK 与原版等宽；见 §5.1）
-CoverageThreshold=128   ; 8bpp 下覆盖率 → 像素的阈值（0..255）
+FontWeight=400          ; 该可变字体默认实例是 ExtraLight(200)，必须显式指定
+FontSizeLatin=13        ; 实测：与原版拉丁/数字/小写墨迹行高一致（见 §6.4）
+FontSizeCJK=16          ; 实测：原版中日韩字形占满 16 行格，13px 会明显偏小
+BaselineRow=13          ; 格子内的基线行（16 行格）
+FitToAdvance=1          ; 超出原版步进的字形横向压缩（区间 OR 合并，不丢细笔画）
+PixelMode=mono          ; mono(=M1, 1bpp) | gray(=M2, 抗锯齿)
+CoverageThreshold=128   ; gray 模式下的覆盖率阈值
 SkipPrint=1
 SkipDrawText=1
 BackstopBlit=1          ; 只做漏检

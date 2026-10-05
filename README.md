@@ -31,6 +31,7 @@ F:\Mental Omega\VectorText\
 ├─ selftest.bat           # 离线自检：加载 DLL 并调用全部钩子，不启动游戏
 ├─ run_game.bat           # 用 Syringe 直接启动游戏（等价于 MO 启动器的启动方式）
 ├─ ft_smoke.bat           # 构建并运行 FreeType 冒烟测试（32 位静态链接）
+├─ glyph_test.bat         # 字形对齐测试：game.fnt 原字形 vs 我们的矢量子形
 ├─ VectorText.ini         # 配置（build 时复制到游戏根目录）
 ├─ include\
 │   ├─ SyringeABI.h       # Syringe 钩子 ABI（REGISTERS / declhook / DEFINE_HOOK / 握手结构）
