@@ -301,6 +301,29 @@ int main(int argc, char** argv)
         CHECK(missing != 0 && !ok, "U+%04X refused (engine draws its placeholder)", missing);
     }
 
+    // ---- hot path throughput ----------------------------------------------
+    printf("\n8) hot path throughput (a session draws ~775k glyphs)\n");
+    {
+        LARGE_INTEGER freq, t0, t1;
+        QueryPerformanceFrequency(&freq);
+        const int N = 200000;
+        int x = 4;
+        QueryPerformanceCounter(&t0);
+        for (int i = 0; i < N; ++i)
+        {
+            int newX = -1;
+            if (vt::Takeover::TryBlit(g_bitFont, cps[i % n], x, 4, -1, &newX))
+                x = (newX < 200) ? newX : 4;
+        }
+        QueryPerformanceCounter(&t1);
+        const double ms = (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)freq.QuadPart;
+        printf("  [info] %d glyphs in %.1f ms -> %.1f glyphs/ms", N, ms, (double)N / ms);
+        if (ms > 0.0)
+            printf("  (a 775k-glyph session would cost ~%.0f ms)", ms * 775000.0 / N);
+        printf("\n");
+        CHECK(ms < 2000.0, "throughput acceptable (%.1f ms for %d glyphs)", ms, N);
+    }
+
     // ---- final picture -----------------------------------------------------
     for (int i = 0; i < W * H; ++i) g_surf[i] = BG;
     InitBitFont(&in, g_surf, W, FG, 0, 0, W - 1, H - 1);

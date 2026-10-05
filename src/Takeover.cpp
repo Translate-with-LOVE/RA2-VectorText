@@ -43,6 +43,8 @@ namespace vt
             g_src.SetFitToAdvance(Cfg::FitToAdvance());
             g_src.SetAntiAlias(Cfg::AntiAlias());
 
+            const DWORD t0 = GetTickCount();
+
             // the game's font cell is 3 bytes x 16 rows (game.fnt header)
             if (!g_src.Init(ttf, Cfg::FontSizeLatin(), Cfg::FontWeight(), 3, 16, Cfg::BaselineRow()))
             {
@@ -53,9 +55,10 @@ namespace vt
             g_src.SetSizes(Cfg::FontSizeLatin(), Cfg::FontSizeCJK());
             g_ready = true;
 
-            Log::Note("M1 font ready: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d",
-                      ttf, Cfg::FontSizeLatin(), Cfg::FontSizeCJK(), Cfg::FontWeight(),
-                      Cfg::BaselineRow(), Cfg::FitToAdvance() ? 1 : 0, Cfg::AntiAlias() ? 1 : 0);
+            Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d",
+                      GetTickCount() - t0, ttf, Cfg::FontSizeLatin(), Cfg::FontSizeCJK(),
+                      Cfg::FontWeight(), Cfg::BaselineRow(),
+                      Cfg::FitToAdvance() ? 1 : 0, Cfg::AntiAlias() ? 1 : 0);
             return true;
         }
 
@@ -83,6 +86,15 @@ namespace vt
             if (!symTable || !bitmaps || symbolBytes == 0 || lines <= 0 || lines > 32)
                 return false;
 
+            // The glyph cell we rasterise is built for the game font's metrics.
+            // A different bitmap font (other line count) is handed back to the
+            // engine rather than drawn with the wrong baseline.
+            if (lines != g_src.Lines())
+            {
+                ++g_failed;
+                return false;
+            }
+
             const unsigned int idx = symTable[ch & 0xFFFF];
             if (idx == 0)
             {
@@ -106,23 +118,30 @@ namespace vt
                 : (unsigned short)colorArg;
 
             const int* bounds = (const int*)(bf + BF_BOUNDS);
+
+            // BitFont::Lock guarantees a usable clip rectangle: if the caller
+            // never called SetBounds, Lock fills it with (0, 0, width-1,
+            // height-1) of the surface, otherwise it intersects the caller's
+            // box with the surface.  So a degenerate box means "do not touch
+            // anything" -> hand the glyph back to the engine.
+            if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1])
+            {
+                ++g_failed;
+                return false;
+            }
+
             Target t;
             t.base  = (unsigned short*)base;
             t.pitch = pitch;
-            t.clipL = 0;
-            t.clipT = 0;
-            t.clipR = pitch - 1;
-            t.clipB = 4095;
-            // the engine's own clip rectangle (BitFont::SetBounds); ignore it
-            // when it is degenerate, otherwise intersect
-            if (bounds[2] > bounds[0] && bounds[3] > bounds[1])
+            t.clipL = bounds[0] > 0 ? bounds[0] : 0;
+            t.clipT = bounds[1] > 0 ? bounds[1] : 0;
+            t.clipR = bounds[2] < pitch - 1 ? bounds[2] : pitch - 1;
+            t.clipB = bounds[3];
+            if (t.clipR < t.clipL || t.clipB < t.clipT)
             {
-                if (bounds[0] > t.clipL) t.clipL = bounds[0];
-                if (bounds[1] > t.clipT) t.clipT = bounds[1];
-                if (bounds[2] < t.clipR) t.clipR = bounds[2];
-                if (bounds[3] < t.clipB) t.clipB = bounds[3];
+                ++g_failed;
+                return false;
             }
-            if (t.clipB > 4095) t.clipB = 4095;
 
             if (Cfg::AntiAlias())
                 DrawCellAA(t, *cell, x, y, lines, color, RGB565);

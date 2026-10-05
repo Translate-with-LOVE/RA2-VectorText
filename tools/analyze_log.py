@@ -94,9 +94,11 @@ def main():
     total_new = 0
     garbage = []
 
+    io_lines = []
     with open(path, 'r', encoding='utf-8-sig', errors='replace') as f:
         for line in f:
             line = line.rstrip('\r\n')
+            io_lines.append(line)
             if line.startswith('PROC'):
                 proc = line
             elif line.startswith('EXE'):
@@ -126,14 +128,14 @@ def main():
                 # object arguments, per the layouts confirmed by run #2:
                 #   BitText::Print / DrawText : esp+4 = BitFont*, esp+8 = Surface*,
                 #                               esp+0x10 = X, esp+0x14 = Y
-                args = dict((int(k, 16), v.lower()) for k, v in ARG_RE.findall(extra))
+                argmap = dict((int(k, 16), v.lower()) for k, v in ARG_RE.findall(extra))
                 if 'BitText::' in hook:
-                    if 4 in args:
-                        site['fonts'][args[4]] += 1
-                    if 8 in args:
-                        site['surfaces'][args[8]] += 1
-                    if 0x10 in args and 0x14 in args and len(site['xy']) < 3:
-                        site['xy'].append('%s,%s' % (args[0x10], args[0x14]))
+                    if 4 in argmap:
+                        site['fonts'][argmap[4]] += 1
+                    if 8 in argmap:
+                        site['surfaces'][argmap[8]] += 1
+                    if 0x10 in argmap and 0x14 in argmap and len(site['xy']) < 3:
+                        site['xy'].append('%s,%s' % (argmap[0x10], argmap[0x14]))
                 continue
 
             m = MISS_RE.match(line)
@@ -234,6 +236,26 @@ def main():
         w()
         for h, caller, text, extra in garbage[:10]:
             w('* `%s` caller=0x%s text=%r  %s' % (h, caller[2:], text, extra[:100]))
+
+    # ---- M1 takeover section ------------------------------------------------
+    m1 = [ln for ln in io_lines if 'M1 ' in ln or 'FALLBACK' in ln]
+    w()
+    w('## M1 takeover (Mode=draw)')
+    w()
+    if not m1:
+        w('* none -- the run was in Mode=observe/off (M0 behaviour)')
+    else:
+        for ln in m1[:40]:
+            w('* `%s`' % ln.strip()[:180])
+        nfb = sum(1 for ln in m1 if 'FALLBACK' in ln)
+        w()
+        w('* fallback lines: **%d**%s' % (nfb, '' if nfb == 0 else '  <- something was handed back to the engine'))
+        if not any('takeover:' in ln for ln in m1):
+            w('* no final takeover counters found: the run probably did not exit cleanly')
+        else:
+            for ln in m1:
+                if 'takeover:' in ln:
+                    w('* %s' % ln.strip()[:180])
 
     if args.md:
         with open(args.md, 'w', encoding='utf-8') as f:
