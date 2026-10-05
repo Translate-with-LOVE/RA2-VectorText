@@ -254,80 +254,97 @@ namespace vt
         }
         LeaveCriticalSection(&m_cs);
 
-        // ---- rasterise (outside the lock: FreeType work can be slow) --------
-        FT_Face face = (FT_Face)((codepoint >= m_cjkFrom && m_faceB) ? m_faceB : m_faceA);
-
-        // AA mode rasterises 8-bit coverage and derives the 1bpp mask from it,
-        // so both stay consistent and only one glyph load is needed.
-        const bool aa = m_aa;
-        const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
-        if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
-            return NULL;
-
-        const FT_GlyphSlot g = face->glyph;
-
-        GlyphCell cell;
-        memset(&cell, 0, sizeof(cell));
-
-        const int advance = (gameAdvance > 0) ? gameAdvance : (int)(g->advance.x >> 6);
-        cell.width = (unsigned char)(advance < 0 ? 0 : (advance > 255 ? 255 : advance));
-
-        // place the bitmap: baselineRow - bitmap_top gives the first row
-        const int x0 = g->bitmap_left;
-        const int y0 = m_baseline - g->bitmap_top;
-
-        if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
-        {
-            for (unsigned int r = 0; r < g->bitmap.rows; ++r)
-            {
-                const int y = y0 + (int)r;
-                if (y < 0 || y >= m_lines)
-                    continue;
-                const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
-                for (unsigned int c = 0; c < g->bitmap.width; ++c)
-                {
-                    const int x = x0 + (int)c;
-                    if (x < 0 || x >= m_stride * 8)
-                        continue;
-                    if (!((src[c >> 3] >> (7 - (c & 7))) & 1))
-                        continue;
-                    cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                    cell.cov[y * 24 + x] = 255;
-                }
-            }
-        }
-        else
-        {
-            for (unsigned int r = 0; r < g->bitmap.rows; ++r)
-            {
-                const int y = y0 + (int)r;
-                if (y < 0 || y >= m_lines)
-                    continue;
-                const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
-                for (unsigned int c = 0; c < g->bitmap.width; ++c)
-                {
-                    const int x = x0 + (int)c;
-                    if (x < 0 || x >= m_stride * 8)
-                        continue;
-                    const unsigned char cov = src[c];
-                    if (!cov)
-                        continue;
-                    cell.cov[y * 24 + x] = cov;
-                    if (cov < 128)
-                        continue;
-                    cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                }
-            }
-        }
-
-        if (m_fit)
-            FitColumns(cell, advance, m_stride, m_lines);
-
+        // ---- rasterise (serialised: one FT_Face is not thread safe) ---------
+        // A miss happens once per glyph, so holding the lock here costs nothing
+        // in practice while making concurrent calls safe.
         EnterCriticalSection(&m_cs);
-        std::pair<std::map<unsigned int, GlyphCell>::iterator, bool> ins =
-            m_cache.insert(std::make_pair(key, cell));
-        const GlyphCell* result = &ins.first->second;
-        LeaveCriticalSection(&m_cs);
-        return result;
+        {
+            std::map<unsigned int, GlyphCell>::iterator again = m_cache.find(key);
+            if (again != m_cache.end())
+            {
+                const GlyphCell* hit = &again->second;
+                LeaveCriticalSection(&m_cs);
+                return hit;
+            }
+
+            // bounded cache: a pathological stream of distinct codepoints must
+            // not grow without limit (131k keys x ~900 B would be ~118 MB)
+            if (m_cache.size() >= 16384)
+                m_cache.clear();
+
+            FT_Face face = (FT_Face)((codepoint >= m_cjkFrom && m_faceB) ? m_faceB : m_faceA);
+            const bool aa = m_aa;
+            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
+            if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
+            {
+                LeaveCriticalSection(&m_cs);
+                return NULL;
+            }
+
+            const FT_GlyphSlot g = face->glyph;
+
+            GlyphCell cell;
+            memset(&cell, 0, sizeof(cell));
+
+            const int advance = (gameAdvance > 0) ? gameAdvance : (int)(g->advance.x >> 6);
+            cell.width = (unsigned char)(advance < 0 ? 0 : (advance > 255 ? 255 : advance));
+
+            // place the bitmap: baselineRow - bitmap_top gives the first row
+            const int x0 = g->bitmap_left;
+            const int y0 = m_baseline - g->bitmap_top;
+
+            if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+            {
+                for (unsigned int r = 0; r < g->bitmap.rows; ++r)
+                {
+                    const int y = y0 + (int)r;
+                    if (y < 0 || y >= m_lines)
+                        continue;
+                    const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
+                    for (unsigned int c = 0; c < g->bitmap.width; ++c)
+                    {
+                        const int x = x0 + (int)c;
+                        if (x < 0 || x >= m_stride * 8)
+                            continue;
+                        if (!((src[c >> 3] >> (7 - (c & 7))) & 1))
+                            continue;
+                        cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+                        cell.cov[y * 24 + x] = 255;
+                    }
+                }
+            }
+            else
+            {
+                for (unsigned int r = 0; r < g->bitmap.rows; ++r)
+                {
+                    const int y = y0 + (int)r;
+                    if (y < 0 || y >= m_lines)
+                        continue;
+                    const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
+                    for (unsigned int c = 0; c < g->bitmap.width; ++c)
+                    {
+                        const int x = x0 + (int)c;
+                        if (x < 0 || x >= m_stride * 8)
+                            continue;
+                        const unsigned char cov = src[c];
+                        if (!cov)
+                            continue;
+                        cell.cov[y * 24 + x] = cov;
+                        if (cov < 128)
+                            continue;
+                        cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+                    }
+                }
+            }
+
+            if (m_fit)
+                FitColumns(cell, advance, m_stride, m_lines);
+
+            std::pair<std::map<unsigned int, GlyphCell>::iterator, bool> ins =
+                m_cache.insert(std::make_pair(key, cell));
+            const GlyphCell* result = &ins.first->second;
+            LeaveCriticalSection(&m_cs);
+            return result;
+        }
     }
 }
