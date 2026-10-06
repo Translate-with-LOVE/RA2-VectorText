@@ -1,4 +1,8 @@
-# VectorText — M0 观测原型
+# VectorText
+
+> **当前状态（M2）**：矢量文字的完整交付说明、模式矩阵、画质参数、度量审计、崩溃根因与验证证据
+> 见 [docs/M2-report.md](docs/M2-report.md)。
+> 模式：`Mode=aa`（抗锯齿，推荐）/ `swap`（无 AA）/ `draw`（实验）/ `observe` / `off`。 — M0 观测原型
 
 一个可被 **Syringe** 加载的 32 位钩子 DLL，用来观测 `gamemd.exe` 的文字绘制/度量管线，
 为实现"现代矢量文字渲染"做前置调研（见游戏根目录 `game.fnt-加载机制研究.md` 附录 B）。
