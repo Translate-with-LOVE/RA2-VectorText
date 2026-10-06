@@ -25,6 +25,36 @@ namespace vt
         static __declspec(thread) double t_ideal = 0.0;
         static __declspec(thread) bool   t_hasIdeal = false;
 
+        // ---- per-caller metrics -------------------------------------------
+        // A few fixed-size UI boxes were laid out for the bitmap font and cannot
+        // take wider text (the mission-objectives panel is the only one the
+        // offline audit found).  The caller is recognised by walking the stack
+        // for a code address near a configured one: a UI function that measures
+        // and then draws has *different* addresses for the two calls, so the
+        // match is by neighbourhood (~1 KB) rather than by exact address.
+        static bool CallerWantsGameMetrics(unsigned int esp)
+        {
+            const int n = Cfg::MetricsExceptCount();
+            if (!n || !esp)
+                return false;
+
+            // the stack is plain memory; a bad read is caught by the caller
+            const unsigned int* p = (const unsigned int*)(uintptr_t)esp;
+            for (int i = 0; i < 24; ++i)
+            {
+                const unsigned int v = p[i];
+                if (v < 0x00401000u || v > 0x00700000u)
+                    continue;                        // not a code address
+                for (int k = 0; k < n; ++k)
+                {
+                    const unsigned int e = Cfg::MetricsExceptAt(k);
+                    if (v >= e && v < e + 0x400u)
+                        return true;
+                }
+            }
+            return false;
+        }
+
         static int SubpixelPhase(int x, double trueAdvance, int* published)
         {
             const int rounded = (int)floor(trueAdvance + 0.5);
@@ -401,7 +431,7 @@ namespace vt
         // ------------------------------------------------------------------
         //  Mode=aa: antialiased text with zero control-flow modification.
         // ------------------------------------------------------------------
-        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg)
+        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg, unsigned int callerEsp)
         {
             if (!g_tried)
                 Init();
@@ -435,10 +465,14 @@ namespace vt
             // Antialiased path: we know the pen position, so the fractional
             // advance can be carried across glyphs (subpixel positioning)
             const int gameAdvance = slot[0];                 // the engine's own advance byte
-            const double trueAdv = (g_advScale > 1.0) ? gameAdvance * g_advScale : (double)gameAdvance;
+            // fixed-size UI boxes keep the engine's metrics: no scaling, no
+            // natural advance, no subpixel drift
+            const bool keepGame = CallerWantsGameMetrics(callerEsp);
+            const double trueAdv = (!keepGame && g_advScale > 1.0) ? gameAdvance * g_advScale
+                                                                  : (double)gameAdvance;
             int published = gameAdvance;
-            const int phase = SubpixelPhase(x, trueAdv, &published);
-            const int advance = g_vecMetrics ? -1 : published;
+            const int phase = keepGame ? 0 : SubpixelPhase(x, trueAdv, &published);
+            const int advance = (g_vecMetrics && !keepGame) ? -1 : published;
 
             const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1, phase);
             if (!cell)

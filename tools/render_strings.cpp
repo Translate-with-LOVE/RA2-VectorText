@@ -201,6 +201,7 @@ int main(int argc, char** argv)
     const char* outPath = "strings_sheet.bmp";
     int top = 40, minCount = 2, aa = 1, maxWidth = WIDTH - 8;
     int wght = 400, darkening = 0, subpixel = 1; double gamma = 1.0; const char* metrics = "scaled"; double advScale = 1.05;
+    bool exceptHit = false;
 
     for (int i = 1; i < argc - 1; ++i)
     {
@@ -217,6 +218,7 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--subpixel"))  subpixel = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--metrics"))   metrics = argv[++i];
         else if (!strcmp(argv[i], "--advscale"))  advScale = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--except-hit")) exceptHit = true;
     }
 
     // the tool loads the same INI the DLL would
@@ -326,8 +328,15 @@ int main(int argc, char** argv)
                     break;
 
                 int newX = -1;
+                // the per-caller metrics check reads the caller's stack; the harness
+                // has no engine stack, so it passes a scratch block (no match)
+                static unsigned int scratch[32] = { 0 };
+                if (exceptHit)
+                    for (int k = 0; k < vt::Cfg::MetricsExceptCount(); ++k)
+                        scratch[3] = vt::Cfg::MetricsExceptAt(k) + 0x40u;
+                unsigned int esp = (unsigned int)(uintptr_t)scratch;
                 const bool viaAA = (vt::Cfg::Mode() == vt::Cfg::Mode_AA);
-                const bool ok = viaAA ? vt::Takeover::DrawAA(g_bitFont, cp, x, y, -1)
+                const bool ok = viaAA ? vt::Takeover::DrawAA(g_bitFont, cp, x, y, -1, esp)
                                       : vt::Takeover::TryBlit(g_bitFont, cp, x, y, -1, &newX);
                 if (ok)
                 {

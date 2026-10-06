@@ -48,7 +48,7 @@ namespace vt
         //   3. the hook returns 0: the engine runs normally, its epilogue
         //      restores the registers, and its return value (X + advance) is
         //      the correct pen position.
-        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg);
+        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg, unsigned int callerEsp);
 
         // Read-only field dump, logged once per distinct BitFont object.  Runs
         // in observe mode too, so a single safe run proves (or disproves) the

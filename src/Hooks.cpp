@@ -381,7 +381,7 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         bool drawn = false;
         __try
         {
-            drawn = vt::Takeover::DrawAA((void*)(uintptr_t)R->ECX(), wch, x, y, color);
+            drawn = vt::Takeover::DrawAA((void*)(uintptr_t)R->ECX(), wch, x, y, color, (unsigned int)R->ESP());
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {

@@ -55,6 +55,11 @@ namespace vt
         bool VectorMetrics();              // true: our own advances (natural metrics)
         double AdvanceScale();             // Metrics=scaled: advance = game * scale
         int  Supersample();                // 1 = off, 2 = rasterise at 2x
+
+        // MetricsExcept: code addresses whose function must keep the engine's own
+        // metrics even when Metrics=scaled/vector (fixed-size UI boxes)
+        int  MetricsExceptCount();
+        unsigned int MetricsExceptAt(int i);
         int  ConfigInt(const char* key, int def);
         void ConfigStr(const char* key, const char* def, char* out, int cch);
     }

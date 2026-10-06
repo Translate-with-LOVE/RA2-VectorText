@@ -45,6 +45,8 @@ namespace vt
         double g_cfgGamma    = 1.0;
         bool  g_cfgVecMetrics = false;
         int   g_cfgSS        = 2;
+        unsigned int g_cfgExcept[8] = { 0 };
+        int   g_cfgExceptN   = 0;
         double g_cfgAdvScale  = 1.0;
 
         struct Entry
@@ -189,6 +191,19 @@ namespace vt
             g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
             g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
             g_cfgSS         = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
+            {
+                char ex[256] = { 0 };
+                GetPrivateProfileStringA("VectorText", "MetricsExcept", "", ex, sizeof(ex), ini);
+                char* p = ex;
+                while (*p && g_cfgExceptN < 8)
+                {
+                    while (*p == ' ' || *p == ',') ++p;
+                    if (!*p) break;
+                    unsigned int v = (unsigned int)strtoul(p, &p, 0);
+                    if (v) g_cfgExcept[g_cfgExceptN++] = v;
+                    while (*p && *p != ',') ++p;
+                }
+            }
             if (g_cfgSS < 1) g_cfgSS = 1;
             if (g_cfgSS > 4) g_cfgSS = 4;
             {
@@ -568,6 +583,8 @@ namespace vt
         bool VectorMetrics()     { Load(); return g_cfgVecMetrics; }
         double AdvanceScale()    { Load(); return g_cfgAdvScale; }
         int  Supersample()       { Load(); return g_cfgSS; }
+        int  MetricsExceptCount(){ Load(); return g_cfgExceptN; }
+        unsigned int MetricsExceptAt(int i) { Load(); return (i >= 0 && i < g_cfgExceptN) ? g_cfgExcept[i] : 0u; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {
