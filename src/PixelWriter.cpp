@@ -176,12 +176,12 @@ namespace vt
             const int bi = ((dst ^ (coverage << 1)) >> 1) & 3;
             const int bj = ((dst >> 5) ^ coverage) & 3;
             const int off = k_bayer[bi][bj] - 8;              // -8..+7
-            const int rs = 1 << (8 - fmt.redBits);
-            const int gs = 1 << (8 - fmt.greenBits);
-            const int bs = 1 << (8 - fmt.blueBits);
-            r += (off * rs) / 32;
-            g += (off * gs) / 32;
-            b += (off * bs) / 32;
+            // half of one native step, expressed in the 8-bit domain:
+            // a 5-bit channel steps by 8, so half a step is 4 -> off/4 with
+            // off in [-8,7]; the old /32 scaling produced +/-2 levels instead
+            r += ((off * ((1 << (8 - fmt.redBits)) / 2)) + 8) / 16;
+            g += ((off * ((1 << (8 - fmt.greenBits)) / 2)) + 8) / 16;
+            b += ((off * ((1 << (8 - fmt.blueBits)) / 2)) + 8) / 16;
             if (r < 0) r = 0; if (r > rMask) r = rMask;
             if (g < 0) g = 0; if (g > gMask) g = gMask;
             if (b < 0) b = 0; if (b > bMask) b = bMask;

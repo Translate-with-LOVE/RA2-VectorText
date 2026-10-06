@@ -13,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_vertFill(false),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_vertFill(false), m_darkErr{0,0,0}, m_classAlign(true),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         InitializeCriticalSection(&m_cs);
@@ -103,8 +103,16 @@ namespace vt
         // stem darkening must be set before the faces are created
         if (m_darkening > 0)
         {
+            // The documented knobs are module specific: CFF exposes
+            // "no-stem-darkening" and the auto-hinter "darkening"/"warping".
+            // Try them and RECORD what the library answered (the previous code
+            // used a property name that does not exist and ignored the error).
             FT_UInt amount = (FT_UInt)m_darkening;
-            FT_Property_Set(lib, "truetype", "darkening", &amount);
+            FT_Bool noDark = 0;
+            FT_Error e1 = FT_Property_Set(lib, "cff", "no-stem-darkening", &noDark);
+            FT_Error e2 = FT_Property_Set(lib, "autofitter", "darkening", &amount);
+            FT_Error e3 = FT_Property_Set(lib, "truetype", "darkening", &amount);
+            m_darkErr[0] = (int)e1; m_darkErr[1] = (int)e2; m_darkErr[2] = (int)e3;
         }
 
         m_ss = (m_ss < 1) ? 1 : (m_ss > 4 ? 4 : m_ss);
@@ -334,7 +342,12 @@ namespace vt
     {
         if (!m_faceA)
             return NULL;
-        phase &= 3;
+
+        // phase is a SIGNED shift in quarter pixels (-3..3).  The outline is
+        // rasterised at size*m_ss, so a shift of one screen pixel is m_ss ppem
+        // there: in 26.6 units that is m_ss * 64, hence phase * 16 * m_ss.
+        if (phase < -3) phase = -3;
+        if (phase >  3) phase =  3;
 
         // cache key: codepoint + the ACTUAL advance used + subpixel phase.
         // It used to store only "an advance was supplied", so once the published
@@ -343,7 +356,7 @@ namespace vt
         // drawing then disagreed (overlapping Latin, cramped punctuation).
         const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
         const unsigned int key = codepoint | ((unsigned int)advKey << 23)
-                                          | ((unsigned int)phase << 31);
+                                          | ((unsigned int)((phase + 3) & 7) << 31);
 
         EnterCriticalSection(&m_cs);
         std::map<unsigned int, GlyphCell>::iterator it = m_cache.find(key);
@@ -382,7 +395,7 @@ namespace vt
             FT_Vector delta;
             mat.xx = 1 << 16; mat.xy = 0;
             mat.yx = 0;       mat.yy = 1 << 16;
-            delta.x = (FT_Pos)(phase * 16);          // 1/4 px in 26.6
+            delta.x = (FT_Pos)(phase * 16 * m_ss);   // quarter pixels -> rasteriser space
             delta.y = 0;
             FT_Set_Transform(face, &mat, phase ? &delta : NULL);
 
@@ -489,6 +502,103 @@ namespace vt
                         if (cov >= 128)
                             cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
                     }
+            }
+
+            // Align the ink to the same row the original 16x16 bitmap uses for
+            // this class of character.  Measured from game.fnt itself:
+            //   CJK ideographs / fullwidth : ink top row 0
+            //   ASCII lower case           : ink top row 3
+            //   ASCII upper / digits / punct: ink top row 4
+            if (m_classAlign)
+            {
+                int top = -1, bot = -1;
+                for (int y = 0; y < m_lines && top < 0; ++y)
+                    for (int x = 0; x < m_stride * 8; ++x)
+                        if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
+                        {
+                            top = y;
+                            break;
+                        }
+                if (top >= 0)
+                {
+                    for (int y = m_lines - 1; y >= 0 && bot < 0; --y)
+                        for (int x = 0; x < m_stride * 8; ++x)
+                            if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
+                            {
+                                bot = y;
+                                break;
+                            }
+
+                    // game.fnt is a 16x16 bitmap face: ideographs fill all 16
+                    // rows, bottom-hugging punctuation sits in 12..15, lower
+                    // case ascenders start at 3 and x-height letters at 6.
+                    const bool cjkPunct = (codepoint >= 0x3001 && codepoint <= 0x3011) ||
+                                          codepoint == 0xFF0C || codepoint == 0xFF1A ||
+                                          codepoint == 0xFF1B || codepoint == 0xFF01 ||
+                                          codepoint == 0xFF1F || codepoint == '.' ||
+                                          codepoint == ',';
+                    const bool ascender = codepoint == 'b' || codepoint == 'd' || codepoint == 'f' ||
+                                          codepoint == 'h' || codepoint == 'k' || codepoint == 'l' ||
+                                          codepoint == 't';
+                    const int target = cjkPunct ? -1                        // bottom aligned
+                                     : (codepoint >= 0x2E80) ? 0
+                                     : (codepoint >= 'a' && codepoint <= 'z') ? (ascender ? 3 : 6) : 4;
+                    int dy = (target < 0) ? ((m_lines - 1) - bot) : (target - top);
+                    if (dy > 3) dy = 3;
+                    if (dy < -3) dy = -3;
+                    if (bot + dy > m_lines - 1) dy = (m_lines - 1) - bot;
+                    if (top + dy < 0) dy = -top;
+
+                    // Ideographs fill the whole 16x16 design box in game.fnt,
+                    // while a vector ideograph is shorter - stretch the ink rows
+                    // over 0..15 so the text occupies the same band.
+                    const bool ideograph = (codepoint >= 0x4E00 && codepoint <= 0x9FFF) ||
+                                           (codepoint >= 0xFF01 && codepoint <= 0xFF5E);
+                    if (ideograph && bot > top && (bot - top + 1) < m_lines)
+                    {
+                        unsigned char nb[3 * 32];
+                        unsigned char nc[24 * 32];
+                        memset(nb, 0, sizeof(nb));
+                        memset(nc, 0, sizeof(nc));
+                        for (int y = top; y <= bot; ++y)
+                        {
+                            int ny = ((y - top) * (m_lines - 1)) / (bot - top);
+                            if (ny < 0) ny = 0;
+                            if (ny > m_lines - 1) ny = m_lines - 1;
+                            for (int x = 0; x < m_stride * 8; ++x)
+                            {
+                                if (cell.cov[y * 24 + x] > nc[ny * 24 + x])
+                                    nc[ny * 24 + x] = cell.cov[y * 24 + x];
+                                if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
+                                    nb[ny * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+                            }
+                        }
+                        memcpy(cell.bits, nb, sizeof(cell.bits));
+                        memcpy(cell.cov, nc, sizeof(cell.cov));
+                        dy = 0;
+                    }
+
+                    if (dy > 0)
+                    {
+                        for (int y = m_lines - 1; y >= dy; --y)
+                        {
+                            memcpy(cell.bits + y * m_stride, cell.bits + (y - dy) * m_stride, m_stride);
+                            memcpy(cell.cov + y * 24, cell.cov + (y - dy) * 24, 24);
+                        }
+                        memset(cell.bits, 0, (size_t)dy * m_stride);
+                        memset(cell.cov, 0, (size_t)dy * 24);
+                    }
+                    else if (dy < 0)
+                    {
+                        for (int y = 0; y < m_lines + dy; ++y)
+                        {
+                            memcpy(cell.bits + y * m_stride, cell.bits + (y - dy) * m_stride, m_stride);
+                            memcpy(cell.cov + y * 24, cell.cov + (y - dy) * 24, 24);
+                        }
+                        memset(cell.bits + (m_lines + dy) * m_stride, 0, (size_t)(-dy) * m_stride);
+                        memset(cell.cov + (m_lines + dy) * 24, 0, (size_t)(-dy) * 24);
+                    }
+                }
             }
 
             if (m_fit)

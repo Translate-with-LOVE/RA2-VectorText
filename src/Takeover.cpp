@@ -70,9 +70,11 @@ namespace vt
                 t_hasIdeal = true;
             }
             double frac = t_ideal - (double)x;       // our ideal pen vs the engine
-            if (frac < -1.0) frac = -1.0;
-            if (frac >  1.0) frac =  1.0;
-            int phase = (int)floor(frac * 4.0 + 0.5) & 3;
+            if (frac < -0.5) frac = -0.5;            // keep it in half a pixel
+            if (frac >  0.5) frac =  0.5;
+            int phase = (int)floor(frac * 4.0 + 0.5);   // SIGNED quarter pixels
+            if (phase < -2) phase = -2;                 // drop the integer part:
+            if (phase >  2) phase =  2;                 // |shift| stays <= 0.5 px
             t_ideal += trueAdvance;
             return phase;
         }
@@ -250,6 +252,7 @@ namespace vt
             g_src.SetAntiAlias(useAA);
             g_src.SetStemDarkening(Cfg::StemDarkening());
             g_src.SetSupersample(Cfg::Supersample());
+            g_src.SetClassAlign(Cfg::ConfigInt("ClassAlign", 1) != 0);
             g_src.SetFitMode(Cfg::ConfigInt("FitMode", 0) != 0 ? 1 : 0);
             SetCoverageGamma(Cfg::Gamma());
             SetLinearBlend(Cfg::LinearBlend());

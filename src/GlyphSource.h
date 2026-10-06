@@ -66,6 +66,10 @@ namespace vt
         //          1 = scale (shrink both axes by the same factor, keeps proportions)
         void SetFitMode(int mode) { m_fitMode = mode; }
 
+        // Align each character class to the ink rows the original 16x16 bitmap
+        // font uses for that class (CJK 0, lower case 3, upper/digits 4).
+        void SetClassAlign(bool on) { m_classAlign = on; }
+
         bool Ready() const { return m_faceA != NULL; }
         bool AntiAlias() const { return m_aa; }
         void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
@@ -111,6 +115,11 @@ namespace vt
         int   m_ss;
         int   m_fitMode;
         bool  m_vertFill;
+        int   m_darkErr[3];
+        bool  m_classAlign;
+    public:
+        const int* StemDarkeningErrors() const { return m_darkErr; }
+    private:
         const char* m_path;
         int   m_weight;
 
