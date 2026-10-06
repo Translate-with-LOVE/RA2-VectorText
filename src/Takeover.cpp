@@ -132,6 +132,8 @@ namespace vt
         //     83 C4 14   add esp, 0x14       ; drop it + the 4 arguments
         //     52         push edx
         //     C3         ret                 ; -> ESP = entry + 0x14, EIP = caller
+        bool TestCallerWantsGameMetrics(unsigned int esp) { return CallerWantsGameMetrics(esp); }
+
         void* SkipTrampoline()
         {
             static void* code = NULL;
@@ -214,6 +216,8 @@ namespace vt
             g_vecMetrics = Cfg::VectorMetrics();
             g_advScale = Cfg::AdvanceScale();
             g_subpixel = Cfg::ConfigInt("Subpixel", 1) != 0;
+            Log::Note("M1 metrics: mode=%d advanceScale=%.3f subpixel=%d supersample=%d dropout-exceptions=%d",
+                      (int)Cfg::Mode(), g_advScale, g_subpixel ? 1 : 0, Cfg::Supersample(), Cfg::MetricsExceptCount());
             // natural metrics means no horizontal condensing: the glyph keeps
             // its own width and we hand that width to the engine (see below)
             g_src.SetFitToAdvance(!g_vecMetrics && Cfg::FitToAdvance());
@@ -468,6 +472,8 @@ namespace vt
             // fixed-size UI boxes keep the engine's metrics: no scaling, no
             // natural advance, no subpixel drift
             const bool keepGame = CallerWantsGameMetrics(callerEsp);
+            if (keepGame && (g_drawn % 512) == 0)
+                Log::Note("M1 metrics: excepted caller (stack 0x%08X) keeps the engine advance (x=%d wch=U+%04X)", callerEsp, x, ch);
             const double trueAdv = (!keepGame && g_advScale > 1.0) ? gameAdvance * g_advScale
                                                                   : (double)gameAdvance;
             int published = gameAdvance;

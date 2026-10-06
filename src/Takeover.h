@@ -77,6 +77,10 @@ namespace vt
         // The stack fix-up used instead of R->ESP (which Syringe drops).
         void* SkipTrampoline();
 
+        // test entry: does the stack at sp belong to a caller that must keep
+        // the engine's own metrics?
+        bool TestCallerWantsGameMetrics(unsigned int esp);
+
         // One-line diagnostic state, reported in the FINAL log summary so that
         // even a hard crash tells us how far the takeover got.
         void DiagLine(char* out, int cch);
