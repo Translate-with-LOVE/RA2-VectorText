@@ -52,6 +52,8 @@ namespace vt
         bool Probe();                      // log the runtime BitFont layout once
         int  StemDarkening();              // FreeType stem darkening (0 = off)
         double Gamma();                    // coverage gamma for the AA path
+        bool VectorMetrics();              // true: our own advances (natural metrics)
+        double AdvanceScale();             // Metrics=scaled: advance = game * scale
         int  ConfigInt(const char* key, int def);
         void ConfigStr(const char* key, const char* def, char* out, int cch);
     }

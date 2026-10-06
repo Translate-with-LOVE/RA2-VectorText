@@ -43,6 +43,8 @@ namespace vt
         bool  g_cfgProbe     = true;
         int   g_cfgDarkening = 0;
         double g_cfgGamma    = 1.0;
+        bool  g_cfgVecMetrics = false;
+        double g_cfgAdvScale  = 1.0;
 
         struct Entry
         {
@@ -185,6 +187,19 @@ namespace vt
             g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
             g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
             g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
+            {
+                char m[32] = { 0 };
+                GetPrivateProfileStringA("VectorText", "Metrics", "game", m, sizeof(m), ini);
+                g_cfgVecMetrics = !_stricmp(m, "vector");
+                if (!_stricmp(m, "scaled"))
+                {
+                    char s[32] = { 0 };
+                    GetPrivateProfileStringA("VectorText", "AdvanceScale", "1.15", s, sizeof(s), ini);
+                    g_cfgAdvScale = atof(s);
+                    if (g_cfgAdvScale < 1.0) g_cfgAdvScale = 1.0;
+                    if (g_cfgAdvScale > 2.0) g_cfgAdvScale = 2.0;
+                }
+            }
             {
                 char buf[32] = { 0 };
                 GetPrivateProfileStringA("VectorText", "Gamma", "1.0", buf, sizeof(buf), ini);
@@ -549,6 +564,8 @@ namespace vt
         bool Probe()             { Load(); return g_cfgProbe; }
         int  StemDarkening()     { Load(); return g_cfgDarkening; }
         double Gamma()           { Load(); return g_cfgGamma; }
+        bool VectorMetrics()     { Load(); return g_cfgVecMetrics; }
+        double AdvanceScale()    { Load(); return g_cfgAdvScale; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {

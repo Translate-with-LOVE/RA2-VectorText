@@ -12,6 +12,8 @@ namespace vt
         // ------------------------------------------------------------ state --
         static GlyphSource   g_src;
         static bool          g_tried = false;
+        static bool          g_vecMetrics = false;   // Metrics=vector
+        static double        g_advScale = 1.0;       // Metrics=scaled
         static bool          g_ready = false;
         static unsigned long long g_drawn = 0, g_skipped = 0, g_failed = 0, g_unknown = 0;
 
@@ -114,7 +116,11 @@ namespace vt
             g_tried = true;
 
             const char* ttf = Cfg::FontFile();
-            g_src.SetFitToAdvance(Cfg::FitToAdvance());
+            g_vecMetrics = Cfg::VectorMetrics();
+            g_advScale = Cfg::AdvanceScale();
+            // natural metrics means no horizontal condensing: the glyph keeps
+            // its own width and we hand that width to the engine (see below)
+            g_src.SetFitToAdvance(!g_vecMetrics && Cfg::FitToAdvance());
 
             // Swap mode feeds the engine's 1bpp pipeline: the cell MUST be
             // rasterised monochrome.  Thresholding grayscale coverage at 128
@@ -301,7 +307,12 @@ namespace vt
 
             unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
 
-            const int advance = slot[0];                     // the original advance
+            // Metrics=game  : keep the engine's advance (layout byte-identical)
+            // Metrics=vector: use FreeType's advance and write it back, so the
+            //                 engine's drawing AND measuring follow our metrics
+            const int gameAdvance = slot[0];                 // the engine's own advance byte
+            const int advance = g_vecMetrics ? -1
+                              : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
             const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
             if (!cell)
                 return false;
@@ -352,11 +363,18 @@ namespace vt
                 return false;
 
             unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
-            const int advance = slot[0];
+            const int gameAdvance = slot[0];                 // the engine's own advance byte
+            const int advance = g_vecMetrics ? -1
+                              : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
 
             const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
             if (!cell)
                 return false;
+
+            // with natural metrics the engine must advance (and measure) by our
+            // own width, so it is written into the glyph's advance byte
+            if (g_vecMetrics && slot[0] != cell->width)
+                slot[0] = cell->width;
 
             const unsigned short color = (colorArg == -1)
                 ? *(const unsigned short*)(bf + BF_COLOR)
