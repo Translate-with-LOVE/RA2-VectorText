@@ -115,7 +115,13 @@ namespace vt
 
             const char* ttf = Cfg::FontFile();
             g_src.SetFitToAdvance(Cfg::FitToAdvance());
-            g_src.SetAntiAlias(Cfg::AntiAlias());
+
+            // Swap mode feeds the engine's 1bpp pipeline: the cell MUST be
+            // rasterised monochrome.  Thresholding grayscale coverage at 128
+            // hollows out thin serif strokes (seen in-game), because most edge
+            // pixels of a 13 px serif glyph sit below 50% coverage.
+            const bool useAA = Cfg::AntiAlias() && Cfg::Mode() == Cfg::Mode_Draw;
+            g_src.SetAntiAlias(useAA);
 
             const DWORD t0 = GetTickCount();
 
@@ -133,7 +139,7 @@ namespace vt
             Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d",
                       GetTickCount() - t0, ttf, Cfg::FontSizeLatin(), Cfg::FontSizeCJK(),
                       Cfg::FontWeight(), Cfg::BaselineRow(),
-                      Cfg::FitToAdvance() ? 1 : 0, Cfg::AntiAlias() ? 1 : 0);
+                      Cfg::FitToAdvance() ? 1 : 0, useAA ? 1 : 0);
             return true;
         }
 
