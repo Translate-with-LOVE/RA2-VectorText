@@ -319,8 +319,10 @@ namespace vt
             FT_Set_Transform(face, &mat, phase ? &delta : NULL);
 
             const bool aa = m_aa;
+            // subpixel phases need the unhinted outline: any hinting snaps the
+            // glyph back onto the pixel grid and the quarter-pixel shift is lost
             const FT_Int32 loadFlags = phase
-                ? (FT_LOAD_TARGET_LIGHT | FT_LOAD_RENDER)
+                ? (FT_LOAD_NO_HINTING | FT_LOAD_RENDER)
                 : ((aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER);
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             {

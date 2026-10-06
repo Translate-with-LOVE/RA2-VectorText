@@ -193,16 +193,13 @@ namespace vt
             if (g_cfgSS > 4) g_cfgSS = 4;
             {
                 char m[32] = { 0 };
-                GetPrivateProfileStringA("VectorText", "Metrics", "game", m, sizeof(m), ini);
+                char s[32] = { 0 };
+                GetPrivateProfileStringA("VectorText", "Metrics", "scaled", m, sizeof(m), ini);
+                GetPrivateProfileStringA("VectorText", "AdvanceScale", "1.05", s, sizeof(s), ini);
                 g_cfgVecMetrics = !_stricmp(m, "vector");
-                if (!_stricmp(m, "scaled"))
-                {
-                    char s[32] = { 0 };
-                    GetPrivateProfileStringA("VectorText", "AdvanceScale", "1.15", s, sizeof(s), ini);
-                    g_cfgAdvScale = atof(s);
-                    if (g_cfgAdvScale < 1.0) g_cfgAdvScale = 1.0;
-                    if (g_cfgAdvScale > 2.0) g_cfgAdvScale = 2.0;
-                }
+                g_cfgAdvScale = (!_stricmp(m, "scaled")) ? atof(s) : 1.0;
+                if (g_cfgAdvScale < 1.0) g_cfgAdvScale = 1.0;
+                if (g_cfgAdvScale > 2.0) g_cfgAdvScale = 2.0;
             }
             {
                 char buf[32] = { 0 };
