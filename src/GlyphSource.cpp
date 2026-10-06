@@ -221,7 +221,8 @@ namespace vt
     // Condense the drawn ink horizontally so it fits `advance` columns.
     // Area/OR merging: 1bpp safe, keeps one-pixel-wide strokes, and preserves
     // the vertical metrics (which is what the baseline depends on).
-    static void FitColumns(GlyphCell& cell, int advance, int strideBytes, int lines)
+    static void FitColumns(GlyphCell& cell, int advance, int strideBytes, int lines,
+                           int fitMode, int baseline)
     {
         if (advance <= 0)
             return;
@@ -245,21 +246,83 @@ namespace vt
         memset(tmp, 0, sizeof(tmp));
         memset(tmpCov, 0, sizeof(tmpCov));
 
-        for (int y = 0; y < lines; ++y)
+        if (fitMode == 0)
         {
-            for (int t = 0; t < dstW; ++t)
+            // --- condense: merge source columns into the available cells -----
+            // horizontally only, which distorts the aspect ratio (a 9 px Latin
+            // cap squeezed into a 7 px cell, CJK squeezed by 10-25%)
+            for (int y = 0; y < lines; ++y)
             {
-                const int sBegin = minX + (t * inkW) / dstW;
-                const int sEnd   = minX + (((t + 1) * inkW) / dstW) - 1;
-                for (int s = sBegin; s <= sEnd && s <= maxX; ++s)
+                for (int t = 0; t < dstW; ++t)
                 {
-                    if (s < minX)
-                        continue;
-                    if (cell.cov[y * 24 + s] > tmpCov[y * 24 + t])
-                        tmpCov[y * 24 + t] = cell.cov[y * 24 + s];
-                    if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
-                        continue;
-                    tmp[y * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
+                    const int sBegin = minX + (t * inkW) / dstW;
+                    const int sEnd   = minX + (((t + 1) * inkW) / dstW) - 1;
+                    for (int s = sBegin; s <= sEnd && s <= maxX; ++s)
+                    {
+                        if (s < minX)
+                            continue;
+                        if (cell.cov[y * 24 + s] > tmpCov[y * 24 + t])
+                            tmpCov[y * 24 + t] = cell.cov[y * 24 + s];
+                        if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
+                            continue;
+                        tmp[y * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
+                    }
+                }
+            }
+        }
+        else
+        {
+            // --- scale: shrink BOTH axes by the same factor ------------------
+            // The glyph keeps its proportions; it only gets a little smaller.
+            // Rows shrink towards the baseline and columns towards the pen
+            // origin, so placement and line height stay exactly as before.
+            int minY = 1 << 30, maxY = -1;
+            for (int y = 0; y < lines; ++y)
+                for (int x = minX; x <= maxX; ++x)
+                    if (cell.bits[y * strideBytes + (x >> 3)] & (0x80 >> (x & 7)))
+                    {
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+            if (maxY < 0)
+            {
+                memcpy(cell.bits, tmp, sizeof(cell.bits));
+                memcpy(cell.cov, tmpCov, sizeof(cell.cov));
+                return;
+            }
+
+            const int inkH = maxY - minY + 1;
+            const int dstH = (inkH * dstW + inkW - 1) / inkW;    // same factor, rounded up
+            const int base = baseline;
+
+            for (int ty = 0; ty < dstH; ++ty)
+            {
+                // destination row, kept on the same side of the baseline
+                int dy = (minY >= base) ? base + ((ty * inkH) / dstH) + (minY - base)
+                                        : base - (((dstH - ty) * (base - minY) + dstH - 1) / dstH);
+                if (dy < 0 || dy >= lines)
+                    continue;
+                const int yBegin = minY + (ty * inkH) / dstH;
+                const int yEnd   = minY + (((ty + 1) * inkH) / dstH) - 1;
+                for (int t = 0; t < dstW; ++t)
+                {
+                    const int xBegin = minX + (t * inkW) / dstW;
+                    const int xEnd   = minX + (((t + 1) * inkW) / dstW) - 1;
+                    for (int s = xBegin; s <= xEnd && s <= maxX; ++s)
+                    {
+                        if (s < minX)
+                            continue;
+                        for (int y = yBegin; y <= yEnd && y <= maxY; ++y)
+                        {
+                            if (y < minY)
+                                continue;
+                            if (cell.cov[y * 24 + s] > tmpCov[dy * 24 + t])
+                                tmpCov[dy * 24 + t] = cell.cov[y * 24 + s];
+                            if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
+                                continue;
+                            tmp[dy * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
+                        }
+                    }
                 }
             }
         }
@@ -412,7 +475,7 @@ namespace vt
             }
 
             if (m_fit)
-                FitColumns(cell, advance, m_stride, m_lines);
+                FitColumns(cell, advance, m_stride, m_lines, m_fitMode, m_baseline);
 
             std::pair<std::map<unsigned int, GlyphCell>::iterator, bool> ins =
                 m_cache.insert(std::make_pair(key, cell));

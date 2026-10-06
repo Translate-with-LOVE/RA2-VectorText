@@ -57,7 +57,8 @@ namespace vt
 
         static int SubpixelPhase(int x, double trueAdvance, int* published)
         {
-            const int rounded = (int)floor(trueAdvance + 0.5);
+            int rounded = (int)floor(trueAdvance + 0.5);
+            if (rounded < 1) rounded = 1;        // 0 would freeze the pen
             if (published)
                 *published = rounded;
             if (!g_subpixel)
@@ -230,6 +231,7 @@ namespace vt
             g_src.SetAntiAlias(useAA);
             g_src.SetStemDarkening(Cfg::StemDarkening());
             g_src.SetSupersample(Cfg::Supersample());
+            g_src.SetFitMode(Cfg::ConfigInt("FitMode", 0) != 0 ? 1 : 0);
             SetCoverageGamma(Cfg::Gamma());
 
             const DWORD t0 = GetTickCount();
