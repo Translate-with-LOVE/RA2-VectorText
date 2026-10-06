@@ -13,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_vertFill(false),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         InitializeCriticalSection(&m_cs);
@@ -336,9 +336,14 @@ namespace vt
             return NULL;
         phase &= 3;
 
-        // cache key: codepoint + which advance source was used + subpixel phase
-        const unsigned int key = codepoint | (gameAdvance > 0 ? 0x80000000u : 0u)
-                                          | ((unsigned int)phase << 29);
+        // cache key: codepoint + the ACTUAL advance used + subpixel phase.
+        // It used to store only "an advance was supplied", so once the published
+        // advance changed (Metrics=scaled writes it back) the cache still served
+        // the cell rasterised for the old advance - measuring, caching and
+        // drawing then disagreed (overlapping Latin, cramped punctuation).
+        const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
+        const unsigned int key = codepoint | ((unsigned int)advKey << 23)
+                                          | ((unsigned int)phase << 31);
 
         EnterCriticalSection(&m_cs);
         std::map<unsigned int, GlyphCell>::iterator it = m_cache.find(key);
@@ -438,9 +443,20 @@ namespace vt
                 memset(acc, 0, sizeof(acc));
 
                 const int w = m_stride * 8;
+
+                // Anti-clip: a vector ideograph reaches further above the baseline
+                // than the game's bitmap cell, so its top rows used to land above
+                // row 0 and were dropped - the visible "top of the glyph is cut"
+                // defect.  If the ink top would overflow, shift the whole glyph
+                // down by whole cell rows so the top is preserved.
+                const int ssTop = m_baseline * ss - g->bitmap_top;
+                int shiftRows = 0;
+                if (ssTop < 0)
+                    shiftRows = ((-ssTop) + ss - 1) / ss;
+
                 for (unsigned int r = 0; r < g->bitmap.rows; ++r)
                 {
-                    const int sy = m_baseline * ss - g->bitmap_top + (int)r;
+                    const int sy = ssTop + shiftRows * ss + (int)r;
                     if (sy < 0 || sy >= m_lines * ss)
                         continue;
                     const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
@@ -460,6 +476,7 @@ namespace vt
                 }
 
                 const int div = ss * ss;
+
                 for (int y = 0; y < m_lines; ++y)
                     for (int x = 0; x < w; ++x)
                     {

@@ -110,6 +110,7 @@ namespace vt
         int   m_darkening;
         int   m_ss;
         int   m_fitMode;
+        bool  m_vertFill;
         const char* m_path;
         int   m_weight;
 
