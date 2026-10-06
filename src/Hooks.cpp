@@ -445,11 +445,15 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
             vt::Log::Count(vt::Hook_BitFont_Blit);
             const DWORD retAddr = (DWORD)R->Stack32(0);
             const DWORD entryEsp = R->ESP();
-            R->ESP(entryEsp + 4 + 0x10);        // pop return address + 4 arguments
+            // R->ESP() would be dropped by Syringe's popad, so the stack fix-up
+            // happens in our trampoline (see Takeover::SkipTrampoline)
+            void* tramp = vt::Takeover::SkipTrampoline();
+            if (!tramp)
+                return 0;                       // no trampoline -> let the engine draw
             R->EAX((DWORD)newX);
             vt::Takeover::SetStage(9);
-            vt::Takeover::LogSkip(entryEsp, retAddr, R->ESP(), newX, wch);
-            return retAddr;                     // skip the original implementation
+            vt::Takeover::LogSkip(entryEsp, retAddr, entryEsp + 0x14, newX, wch);
+            return (DWORD)(uintptr_t)tramp;      // -> add esp,0x14 ; jmp return address
         }
     }
 

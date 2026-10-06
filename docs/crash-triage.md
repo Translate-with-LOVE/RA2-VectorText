@@ -132,3 +132,47 @@ Ares version: 20.333.289
 `%LOCALAPPDATA%\CrashDumps\gamemd.exe.*.dmp` 里有 5 份 8–9 月的崩溃，异常记录各不相同
 （`0x46000161` 执行、`0x48CFCA`、`0xD902EB1`、`0x6A7D184A`、`0x4C1D5492` 读取），
 说明这个整合包本身就有崩溃史 —— 分析新崩溃时应先排除这一背景噪声。
+---
+
+## 8. 根因确认（从 dump 里挖出了 Syringe 的钩子桩）
+
+`debug/snapshot-20261006-142534/extcrashdump.dmp` 是完整内存转储，直接从里面读出被
+Syringe 改写的 `0x00434120` 处机器码（`E9 DB BE 5F 03` = `jmp 0x03A30000`），
+再把 `0x03A30000` 的桩反汇编出来：
+
+```asm
+03A30000  60              pushad                       ; EDI,ESI,EBP,ESP,EBX,EDX,ECX,EAX
+03A30001  9C              pushfd                       ; + EFLAGS
+03A30002  68 20434100    push 0x00434120              ; origin  -> REGISTERS+0x00
+03A30007  54              push esp                     ; REGISTERS* = &origin
+03A30008  E8 ...          call <handler>
+03A3000D  83 C4 08        add  esp, 8
+03A30010  89 44 24 FC     mov  [esp-4], eax            ; 返回值盖写到 origin 字段
+03A30014  9D              popfd                        ; 处理函数可改 EFLAGS
+03A30015  61              popad                        ; 恢复寄存器……ESP 由 popad 决定
+03A30016  83 7C 24 D8 00  cmp  dword [esp-0x28], 0
+03A3001B  74 04           je   replay
+03A3001D  FF 64 24 D8     jmp  dword [esp-0x28]        ; 非 0 -> 跳过去
+```
+
+结论（这就是崩溃的原因）：
+
+1. `REGISTERS` 布局与我们一致（`+0x14` 就是 ESP）✓
+2. **`popad` 不加载保存的 ESP 值** —— x86 的 `popad` 会跳过 ESP 槽，
+   所以 `R->ESP(...)` 的写入被**静默丢弃**；
+3. 返回非 0 时，跳转过去时 **ESP 仍然是钩子入口的值**（指向返回地址）；
+4. 于是我们"跳到返回地址"时 ESP 少了 `0x14` → 调用者的栈帧整体错位 →
+   下一次 `ret` 弹到堆里的表面对象（EIP = `0x…5EB4`）→ 正是 Ares 抓到的那次崩溃。
+
+**修法**：不再依赖 `R->ESP`，改为返回一个小跳板，由它自己做 `ret 0x10` 的栈修复：
+
+```asm
+8B 14 24     mov edx, [esp]      ; 真正的返回地址
+83 C4 14     add esp, 0x14       ; 丢掉返回地址 + 4 个参数
+52           push edx
+C3           ret                 ; EIP = 调用者，ESP = 入口 + 0x14
+```
+
+跳板在 DLL 里用 `VirtualAlloc` 生成一次（`Takeover::SkipTrampoline()`），
+离线测试断言：处理函数返回该跳板、**完全不改 ESP**、`EAX` = 新笔位、像素已写入、
+且跳板字节正是上面 8 字节。

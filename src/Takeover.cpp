@@ -61,6 +61,40 @@ namespace vt
             }
         }
 
+        // Syringe''s stub restores ESP with `popad`, which *ignores* the saved
+        // ESP value -- so R->ESP(...) is silently dropped and a handler that
+        // "returns the caller''s return address" leaves ESP 0x14 too low (that
+        // was the in-game crash).  The stack has to be fixed up by us, from a
+        // trampoline: entered with ESP at the return address, it does exactly
+        // what `ret 0x10` would have done.
+        //     8B 14 24   mov edx, [esp]      ; the real return address
+        //     83 C4 14   add esp, 0x14       ; drop it + the 4 arguments
+        //     52         push edx
+        //     C3         ret                 ; -> ESP = entry + 0x14, EIP = caller
+        void* SkipTrampoline()
+        {
+            static void* code = NULL;
+            if (code)
+                return code;
+
+            void* mem = VirtualAlloc(NULL, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+            if (!mem)
+                return NULL;
+
+            unsigned char* p = (unsigned char*)mem;
+            const unsigned char body[] =
+            {
+                0x8B, 0x14, 0x24,        // mov edx, [esp]
+                0x83, 0xC4, 0x14,        // add esp, 0x14
+                0x52,                    // push edx
+                0xC3                     // ret
+            };
+            memcpy(p, body, sizeof(body));
+            FlushInstructionCache(GetCurrentProcess(), p, sizeof(body));
+            code = mem;
+            return code;
+        }
+
         bool SkipOriginal()
         {
             static int cached = -1;

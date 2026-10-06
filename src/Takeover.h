@@ -74,6 +74,9 @@ namespace vt
         // Used to bisect "our drawing" from "our stack manipulation" in-game.
         bool SkipOriginal();
 
+        // The stack fix-up used instead of R->ESP (which Syringe drops).
+        void* SkipTrampoline();
+
         // One-line diagnostic state, reported in the FINAL log summary so that
         // even a hard crash tells us how far the takeover got.
         void DiagLine(char* out, int cch);

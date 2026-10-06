@@ -198,11 +198,17 @@ int main(int argc, char** argv)
         }
         else if (!strcmp(mode, "draw"))
         {
-            CHECK(ret == call.ret, "returns the caller's return address (0x%08X)", (unsigned)ret);
-            CHECK(r.esp == espBefore + 4 + 0x10, "ESP popped return address + 4 args (0x%08X -> 0x%08X)",
-                  (unsigned)espBefore, (unsigned)r.esp);
+            // Syringe's stub restores ESP with popad, which ignores the saved
+            // ESP: the handler must not rely on R->ESP at all.  It returns a
+            // trampoline that performs the `ret 0x10` stack fix-up instead.
+            CHECK(ret != 0, "draw: returns a jump target (0x%08X)", (unsigned)ret);
+            CHECK(r.esp == espBefore, "draw: handler leaves ESP alone (popad restores it anyway)");
             CHECK((int)r.eax == 8 + adv, "EAX = new pen X (%d + %d = %u)", 8, adv, (unsigned)r.eax);
             CHECK(InkCount() > 20, "pixels written into the locked surface (%d)", InkCount());
+
+            static const unsigned char want[8] = { 0x8B, 0x14, 0x24, 0x83, 0xC4, 0x14, 0x52, 0xC3 };
+            CHECK(memcmp((const void*)(uintptr_t)ret, want, sizeof(want)) == 0,
+                  "trampoline = mov edx,[esp] ; add esp,0x14 ; push edx ; ret");
         }
         else
         {
