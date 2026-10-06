@@ -375,10 +375,12 @@ namespace vt
             DrawCellAA(t, *cell, x, y, lines, color, RGB565);
 
             // 2) ... and the engine's own pass must draw nothing over them, so
-            //    its glyph bitmap is zeroed.  The advance byte stays, which
-            //    keeps layout and every measurement identical to the original.
-            if (slot[1] || slot[symbolBytes - 1])
-                memset(slot + 1, 0, symbolBytes - 1);
+            //    its glyph bitmap is zeroed UNCONDITIONALLY.  (A "clear it only
+            //    if it looks non-empty" shortcut silently skipped most glyphs:
+            //    the top-left and bottom-right bytes of our cells are usually
+            //    zero already, which left the engine drawing its own bitmap on
+            //    top of our antialiased glyph -> visibly doubled, smeared text.)
+            memset(slot + 1, 0, symbolBytes - 1);
 
             SetStage(6);
             ++g_drawn;

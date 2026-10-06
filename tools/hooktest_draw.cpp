@@ -191,7 +191,7 @@ int main(int argc, char** argv)
         const DWORD ret = DriveBlit(blit, 0x4E2D, 8, 4, -1, &call, &r, &espBefore);
         const int adv = GameAdvance(0x4E2D);
 
-        if (!strcmp(mode, "draw"))
+        if (!strcmp(mode, "draw") || !strcmp(mode, "aa"))
         {
             CHECK(ret == call.ret, "returns the caller's return address (0x%08X)", (unsigned)ret);
             CHECK(r.esp == espBefore + 4 + 0x10, "ESP popped return address + 4 args (0x%08X -> 0x%08X)",
@@ -254,7 +254,7 @@ int main(int argc, char** argv)
         int greenPix = 0;
         for (int i = 0; i < W * H; ++i)
             if (g_surf[i] != BG && g_surf[i] != FG) ++greenPix;
-        if (!strcmp(mode, "draw"))
+        if (!strcmp(mode, "draw") || !strcmp(mode, "aa"))
             CHECK(greenPix > 0, "the argument colour reached the surface (%d px)", greenPix);
         else
             CHECK(InkCount() == 0, "observe mode wrote nothing (%d)", InkCount());
@@ -298,6 +298,14 @@ int main(int argc, char** argv)
                     for (int b = 0; b < 8; ++b)
                         if (slot[i] & (0x80 >> b)) ++ink;
                 CHECK(ink > 10, "the swapped cell has ink (%d pixels)", ink);
+            }
+            else if (!strcmp(mode, "aa"))
+            {
+                int nonzero = 0;
+                for (int i = 1; i < g_symbolSize; ++i) if (slot[i]) ++nonzero;
+                CHECK(nonzero == 0, "aa: the engine bitmap is fully blanked (%d non-zero bytes)", nonzero);
+                CHECK(slot[0] == g_origGlyph[0], "aa: advance byte preserved (%u)", (unsigned)slot[0]);
+                CHECK(InkCount() > 20, "aa: our antialiased pixels are in the surface (%d)", InkCount());
             }
             else
             {
