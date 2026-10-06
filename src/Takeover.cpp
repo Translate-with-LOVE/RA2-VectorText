@@ -15,6 +15,80 @@ namespace vt
         static bool          g_ready = false;
         static unsigned long long g_drawn = 0, g_skipped = 0, g_failed = 0, g_unknown = 0;
 
+        // why we handed a glyph back to the engine (all zero in a healthy run)
+        enum Reason
+        {
+            R_NotReady = 0, R_NoInternal, R_NotLocked, R_BadMetrics, R_FontMetrics,
+            R_NoGlyph, R_NoVectorGlyph, R_BadBounds, R_Exception, R_Count
+        };
+        static const char* const kReasonNames[R_Count] =
+        {
+            "font-not-ready", "no-internal-data", "surface-not-locked", "bad-font-data",
+            "font-metrics-mismatch", "no-game-glyph", "no-vector-glyph", "bad-bounds", "exception"
+        };
+        static unsigned long long g_reason[R_Count] = { 0 };
+        static char g_reasonLine[512] = { 0 };
+
+        // ---- diagnostics (they survive a hard crash via the FINAL log line) --
+        static int  g_stage = 0;
+        static bool g_sawDF = false;
+        static int  g_skipLogged = 0;
+        static const char* const kStageNames[] =
+        {
+            "start", "probe", "init", "fontdata", "bounds", "rasterised",
+            "written", "skip-computed", "skipped", "returned"
+        };
+        static const int kStageCount = (int)(sizeof(kStageNames) / sizeof(kStageNames[0]));
+
+        const char* StageName()
+        {
+            if (g_stage < 0 || g_stage >= kStageCount)
+                return "?";
+            return kStageNames[g_stage];
+        }
+
+        void SetStage(int stage) { g_stage = stage; }
+
+        void NoteDirectionFlag()
+        {
+            if (!g_sawDF)
+            {
+                g_sawDF = true;
+                Log::Note("WARNING direction flag (DF) was SET at hook entry; clearing it "
+                          "(CRT memcpy/memset would otherwise write memory backwards)");
+            }
+        }
+
+        bool SkipOriginal()
+        {
+            static int cached = -1;
+            if (cached < 0)
+                cached = Cfg::ConfigInt("SkipOriginal", 1) != 0 ? 1 : 0;
+            return cached != 0;
+        }
+
+        bool SawDirectionFlag() { return g_sawDF; }
+
+        void DiagLine(char* out, int cch)
+        {
+            _snprintf_s(out, (size_t)cch, _TRUNCATE,
+                        "lastStage=%s(%d) sawDF=%d skipped=%d skipOriginal=%d",
+                        StageName(), g_stage, g_sawDF ? 1 : 0, g_skipLogged,
+                        SkipOriginal() ? 1 : 0);
+        }
+
+        // Log the first few skip-the-callee operations in full, so a crash in
+        // that area is diagnosable from the log alone.
+        void LogSkip(DWORD entryEsp, DWORD retAddr, DWORD newEsp, int newX, unsigned int ch)
+        {
+            ++g_skipLogged;
+            if (g_skipLogged > 3)
+                return;
+            Log::Note("SKIP #%d ch=U+%04X entryESP=0x%08X retAddr=0x%08X newESP=0x%08X "
+                      "(delta=0x%X) newX=%d",
+                      g_skipLogged, ch, entryEsp, retAddr, newEsp, newEsp - entryEsp, newX);
+        }
+
         // Offsets verified by disassembling BitFont::Blit / BitFont::Lock:
         //   BitFont   +0x04 InternalData*   +0x0C locked buffer   +0x10 pitch(px)
         //             +0x24 colour word     +0x30..0x3C bounds L,T,R,B
@@ -54,6 +128,7 @@ namespace vt
             }
             g_src.SetSizes(Cfg::FontSizeLatin(), Cfg::FontSizeCJK());
             g_ready = true;
+            SetStage(2);
 
             Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d",
                       GetTickCount() - t0, ttf, Cfg::FontSizeLatin(), Cfg::FontSizeCJK(),
@@ -70,18 +145,27 @@ namespace vt
                 Init();
 
             if (!bitFont || !g_ready)
+            {
+                ++g_reason[R_NotReady];
                 return false;
+            }
 
             const unsigned char* bf = (const unsigned char*)bitFont;
 
             const unsigned char* internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
             if (!internal)
+            {
+                ++g_reason[R_NoInternal];
                 return false;
+            }
 
             void* base = *(void* const*)(bf + BF_BUFFER);          // set by BitFont::Lock
             const int pitch = *(const int*)(bf + BF_PITCH);
             if (!base || pitch <= 0)
+            {
+                ++g_reason[R_NotLocked];
                 return false;
+            }
 
             const unsigned short* symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
             const unsigned int symbolBytes = *(const unsigned int*)(internal + IF_SYMBOLBYTES);
@@ -89,7 +173,10 @@ namespace vt
             const int lines = *(const int*)(internal + IF_LINES);
 
             if (!symTable || !bitmaps || symbolBytes == 0 || lines <= 0 || lines > 32)
+            {
+                ++g_reason[R_BadMetrics];
                 return false;
+            }
 
             // The glyph cell we rasterise is built for the game font's metrics.
             // A different bitmap font (other line count) is handed back to the
@@ -97,6 +184,7 @@ namespace vt
             if (lines != g_src.Lines())
             {
                 ++g_failed;
+                ++g_reason[R_FontMetrics];
                 return false;
             }
 
@@ -105,6 +193,7 @@ namespace vt
             {
                 // no such glyph in the game's font: let the engine deal with it
                 ++g_unknown;
+                ++g_reason[R_NoGlyph];
                 return false;
             }
 
@@ -115,6 +204,7 @@ namespace vt
             if (!cell)
             {
                 ++g_failed;
+                ++g_reason[R_NoVectorGlyph];
                 return false;
             }
 
@@ -132,6 +222,7 @@ namespace vt
             if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1])
             {
                 ++g_failed;
+                ++g_reason[R_BadBounds];
                 return false;
             }
 
@@ -145,6 +236,7 @@ namespace vt
             if (t.clipR < t.clipL || t.clipB < t.clipT)
             {
                 ++g_failed;
+                ++g_reason[R_BadBounds];
                 return false;
             }
 
@@ -152,11 +244,106 @@ namespace vt
                 DrawCellAA(t, *cell, x, y, lines, color, RGB565);
             else
                 DrawCell(t, *cell, x, y, lines, color);
+            SetStage(6);                      // pixels written
+
 
             ++g_drawn;
             if (newX)
                 *newX = x + advance;
             return true;
+        }
+
+        void NoteException()
+        {
+            ++g_reason[R_Exception];
+        }
+
+        // Read-only dump of one BitFont object, once per distinct pointer.
+        // This is the empirical check of every offset the takeover relies on,
+        // and it runs in observe mode too (so no drawing behaviour is needed to
+        // validate the layout).
+        void Probe(void* bitFont, unsigned int ch, int x, int y, int colorArg)
+        {
+            if (!bitFont || !Cfg::Probe())
+                return;
+
+            static const void* seen[8] = { 0 };
+            static int seenCount = 0;
+
+            for (int i = 0; i < seenCount; ++i)
+                if (seen[i] == bitFont)
+                    return;
+            if (seenCount >= 8)
+                return;
+            seen[seenCount++] = bitFont;
+
+            const unsigned char* bf = (const unsigned char*)bitFont;
+            const unsigned char* internal = NULL;
+            void* base = NULL;
+            int pitch = 0, lines = 0, symBytes = 0;
+            const unsigned short* symTable = NULL;
+            const int* bounds = NULL;
+            unsigned short color = 0;
+
+            __try
+            {
+                internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
+                base     = *(void* const*)(bf + BF_BUFFER);
+                pitch    = *(const int*)(bf + BF_PITCH);
+                color    = *(const unsigned short*)(bf + BF_COLOR);
+                bounds   = (const int*)(bf + BF_BOUNDS);
+                if (internal)
+                {
+                    lines    = *(const int*)(internal + IF_LINES);
+                    symBytes = (int)*(const unsigned int*)(internal + IF_SYMBOLBYTES);
+                    symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
+                }
+            }
+            __except (EXCEPTION_EXECUTE_HANDLER)
+            {
+                Log::Note("PROBE bf=0x%p <unreadable>", bitFont);
+                return;
+            }
+
+            unsigned int idx = 0, advance = 0;
+            if (symTable && ch < 0x10000)
+            {
+                idx = symTable[ch & 0xFFFF];
+                if (idx)
+                {
+                    const unsigned char* bitmaps = *(const unsigned char* const*)(internal + IF_BITMAPS);
+                    if (bitmaps && symBytes > 0)
+                        advance = bitmaps[(size_t)(idx - 1) * symBytes];
+                }
+            }
+
+            Log::Note("PROBE bf=0x%p internal=0x%p base=0x%p pitch=%d color=0x%04X "
+                      "bounds=%d,%d,%d,%d lines=%d symBytes=%d firstCh=U+%04X idx=%u advance=%u "
+                      "(x=%d y=%d colorArg=%d mode=%d)",
+                      bitFont, internal, base, pitch, color,
+                      bounds ? bounds[0] : -1, bounds ? bounds[1] : -1,
+                      bounds ? bounds[2] : -1, bounds ? bounds[3] : -1,
+                      lines, symBytes, ch, idx, advance, x, y, colorArg, Cfg::Mode());
+        }
+
+        const char* ReasonSummary()
+        {
+            size_t used = 0;
+            g_reasonLine[0] = 0;
+            for (int i = 0; i < R_Count; ++i)
+            {
+                if (!g_reason[i])
+                    continue;
+                const int n = _snprintf_s(g_reasonLine + used, sizeof(g_reasonLine) - used,
+                                          _TRUNCATE, "%s%s=%llu", used ? " " : "",
+                                          kReasonNames[i], g_reason[i]);
+                if (n <= 0)
+                    break;
+                used += (size_t)n;
+            }
+            if (!used)
+                _snprintf_s(g_reasonLine, sizeof(g_reasonLine), _TRUNCATE, "none");
+            return g_reasonLine;
         }
 
         void Stats(unsigned long long* drawn, unsigned long long* skipped,

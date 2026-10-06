@@ -302,6 +302,27 @@ observe 模式：返回 0、ESP 不变、零像素写入
 
 ### 8.3 游戏内对照（需要你跑一局）
 
+**第一步请用 `Mode=observe` 跑一局**：这一遍除了确认"零变化"，还会写出运行时布局探针
+（`Probe=1`，每发现一个 BitFont 对象写一行，只读不画）：
+
+```
+PROBE bf=0x… internal=0x… base=0x… pitch=… color=0x… bounds=L,T,R,B lines=… symBytes=… firstCh=U+XXXX idx=… advance=…
+```
+
+这一行是对本文全部偏移假设的**实证**（pitch 是否合理、lines 是否 16、bounds 是否有效、advance 是否等于
+game.fnt 的宽度字节）。若某字段与预期不符，日志会立刻暴露，而不是等画面出问题。
+
+第二步再打开 `Mode=draw`，然后：
+
+```bat
+python tools\analyze_log.py F:\Mental Omega\VectorText.log --md report.md
+```
+
+看 `M1 takeover: drawn=… failed=…` 与 `M1 refusals : <原因>=<次数>`（原因分类：
+font-not-ready / no-internal-data / surface-not-locked / bad-font-data / font-metrics-mismatch /
+no-game-glyph / no-vector-glyph / bad-bounds / exception）。健康局面应只有 `no-game-glyph`
+（game.fnt 里没有的字符）与 `surface-not-locked`（引擎自己也没画）。
+
 ```bat
 python tools\screenshot_diff.py before.png after.png --regions --out diff.png
 ```

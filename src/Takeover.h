@@ -1,5 +1,10 @@
 #pragma once
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+
 // ===========================================================================
 //  Takeover -- replaces the *glyph pixels* the engine draws, one glyph at a
 //  time, by hooking BitFont::Blit (0x434120).
@@ -26,6 +31,37 @@ namespace vt
         // font's current colour" (BitFont+0x24).
         // On success, *newX = x + <advance of the original glyph>.
         bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX);
+
+        // Read-only field dump, logged once per distinct BitFont object.  Runs
+        // in observe mode too, so a single safe run proves (or disproves) the
+        // runtime layout the takeover relies on before draw mode is enabled.
+        void Probe(void* bitFont, unsigned int ch, int x, int y, int colorArg);
+
+        // Why glyphs were handed back to the engine, as a short summary string.
+        const char* ReasonSummary();
+
+        // Called by the hook when its SEH guard caught something.
+        void NoteException();
+
+        // Diagnostics: which step the takeover reached (the FINAL log line
+        // reports it, so even a hard crash tells us how far we got), and
+        // whether the direction flag was set on entry (CRT string routines
+        // assume DF=0 and would otherwise write memory backwards).
+        const char* StageName();
+        void SetStage(int stage);
+        void NoteDirectionFlag();
+
+        // SkipOriginal=0 draws our glyph and then lets the engine draw its own
+        // on top: identical drawing code, but the call flow is never modified.
+        // Used to bisect "our drawing" from "our stack manipulation" in-game.
+        bool SkipOriginal();
+
+        // One-line diagnostic state, reported in the FINAL log summary so that
+        // even a hard crash tells us how far the takeover got.
+        void DiagLine(char* out, int cch);
+
+        // Logs the first few skip-the-callee operations in full.
+        void LogSkip(DWORD entryEsp, DWORD retAddr, DWORD newEsp, int newX, unsigned int ch);
 
         void Stats(unsigned long long* drawn, unsigned long long* skipped,
                    unsigned long long* failed, unsigned long long* unknown);

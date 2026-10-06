@@ -40,6 +40,7 @@ namespace vt
         bool  g_cfgFit       = true;
         bool  g_cfgAA        = true;
         bool  g_cfgFallback  = true;
+        bool  g_cfgProbe     = true;
 
         struct Entry
         {
@@ -178,6 +179,7 @@ namespace vt
             g_cfgFit        = GetPrivateProfileIntA("VectorText", "FitToAdvance", 1, ini) != 0;
             g_cfgAA         = GetPrivateProfileIntA("VectorText", "AntiAlias", 1, ini) != 0;
             g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
+            g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
 
             if (g_cfgSizeLatin < 6)  g_cfgSizeLatin = 6;
             if (g_cfgSizeCJK < 6)    g_cfgSizeCJK = 6;
@@ -400,6 +402,12 @@ namespace vt
                 Takeover::Stats(&drawn, &skipped, &failed, &unknown);
                 WriteLine(Format(" M1 takeover: drawn=%llu skipped=%llu failed=%llu unknownGlyph=%llu",
                                  drawn, skipped, failed, unknown));
+                WriteLine(Format(" M1 refusals : %s", Takeover::ReasonSummary()));
+                {
+                    char diag[256] = { 0 };
+                    Takeover::DiagLine(diag, sizeof(diag));
+                    WriteLine(Format(" M1 diagnostics: %s", diag));
+                }
             }
             if (g_file != INVALID_HANDLE_VALUE)
             {
@@ -522,6 +530,7 @@ namespace vt
         bool FitToAdvance()      { Load(); return g_cfgFit; }
         bool AntiAlias()         { Load(); return g_cfgAA; }
         bool FallbackOnError()   { Load(); return g_cfgFallback; }
+        bool Probe()             { Load(); return g_cfgProbe; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {

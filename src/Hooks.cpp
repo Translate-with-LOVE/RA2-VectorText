@@ -350,6 +350,30 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
     const int y = (int)R->Stack32(0xC);
     const int color = (int)R->Stack32(0x10);
 
+    // Hook code must never assume DF=0: the CRT routines our rasteriser uses
+    // (memcpy/memset) write *backwards* when the direction flag is set, which
+    // corrupts memory instead of filling the glyph cell.
+    if (R->EFLAGS() & 0x400u)
+    {
+        vt::Takeover::NoteDirectionFlag();
+        R->EFLAGS(R->EFLAGS() & ~0x400u);
+    }
+
+    // Read-only probe: logs the runtime BitFont layout once per object -- in
+    // observe mode too, so the takeover's assumptions can be checked against
+    // real data before draw mode is ever enabled.
+    if (vt::Cfg::Probe())
+    {
+        __try
+        {
+            vt::Takeover::Probe((void*)(uintptr_t)R->ECX(), wch, x, y, color);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            vt::Log::Note("PROBE <exception reading BitFont 0x%08X>", R->ECX());
+        }
+    }
+
     if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw && wch != 0)
     {
         int newX = x;
@@ -362,15 +386,29 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
             drawn = false;
+            vt::Takeover::NoteException();
             vt::Log::Note("FALLBACK blit-exception wch=U+%04X x=%d y=%d", wch, x, y);
+        }
+
+        if (drawn && !vt::Takeover::SkipOriginal())
+        {
+            // Bisect mode: our pixels are written, but the engine still runs its
+            // own Blit on top, so the call flow is untouched.  Nothing visible
+            // changes; this only proves our drawing is safe in the real game.
+            vt::Takeover::SetStage(9);
+            vt::Log::Count(vt::Hook_BitFont_Blit);
+            return 0;
         }
 
         if (drawn)
         {
             vt::Log::Count(vt::Hook_BitFont_Blit);
             const DWORD retAddr = (DWORD)R->Stack32(0);
-            R->ESP(R->ESP() + 4 + 0x10);        // pop return address + 4 arguments
+            const DWORD entryEsp = R->ESP();
+            R->ESP(entryEsp + 4 + 0x10);        // pop return address + 4 arguments
             R->EAX((DWORD)newX);
+            vt::Takeover::SetStage(9);
+            vt::Takeover::LogSkip(entryEsp, retAddr, R->ESP(), newX, wch);
             return retAddr;                     // skip the original implementation
         }
     }

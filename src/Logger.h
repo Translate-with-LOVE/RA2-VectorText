@@ -49,6 +49,7 @@ namespace vt
         bool FitToAdvance();
         bool AntiAlias();
         bool FallbackOnError();
+        bool Probe();                      // log the runtime BitFont layout once
         int  ConfigInt(const char* key, int def);
         void ConfigStr(const char* key, const char* def, char* out, int cch);
     }
