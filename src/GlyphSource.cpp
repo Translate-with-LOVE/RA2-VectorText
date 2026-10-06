@@ -13,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         InitializeCriticalSection(&m_cs);
@@ -319,11 +319,11 @@ namespace vt
             FT_Set_Transform(face, &mat, phase ? &delta : NULL);
 
             const bool aa = m_aa;
-            // subpixel phases need the unhinted outline: any hinting snaps the
-            // glyph back onto the pixel grid and the quarter-pixel shift is lost
-            const FT_Int32 loadFlags = phase
-                ? (FT_LOAD_NO_HINTING | FT_LOAD_RENDER)
-                : ((aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER);
+            // Subpixel phases keep LIGHT hinting: vertical hinting is exactly what
+            // preserves one-pixel horizontal strokes at these sizes.  Fully
+            // unhinted outlines (FT_LOAD_NO_HINTING) lost them, which is why
+            // horizontal strokes turned into dotted lines.
+            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             {
                 LeaveCriticalSection(&m_cs);

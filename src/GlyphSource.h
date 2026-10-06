@@ -62,6 +62,10 @@ namespace vt
         // More accurate coverage at small sizes: cleaner edges, better weight.
         void SetSupersample(int ss);
 
+        // FitMode: 0 = condense (merge columns only, distorts the aspect ratio),
+        //          1 = scale (shrink both axes by the same factor, keeps proportions)
+        void SetFitMode(int mode) { m_fitMode = mode; }
+
         bool Ready() const { return m_faceA != NULL; }
         bool AntiAlias() const { return m_aa; }
         void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
@@ -105,6 +109,7 @@ namespace vt
         bool  m_aa;
         int   m_darkening;
         int   m_ss;
+        int   m_fitMode;
         const char* m_path;
         int   m_weight;
 
