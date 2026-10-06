@@ -129,6 +129,7 @@ namespace vt
             const bool useAA = Cfg::AntiAlias() && (Cfg::Mode() == Cfg::Mode_Draw || Cfg::Mode() == Cfg::Mode_AA);
             g_src.SetAntiAlias(useAA);
             g_src.SetStemDarkening(Cfg::StemDarkening());
+            g_src.SetSupersample(Cfg::Supersample());
             SetCoverageGamma(Cfg::Gamma());
 
             const DWORD t0 = GetTickCount();

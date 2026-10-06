@@ -13,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         InitializeCriticalSection(&m_cs);
@@ -107,7 +107,8 @@ namespace vt
             FT_Property_Set(lib, "truetype", "darkening", &amount);
         }
 
-        m_faceA = OpenFace(pixelSize);
+        m_ss = (m_ss < 1) ? 1 : (m_ss > 4 ? 4 : m_ss);
+        m_faceA = OpenFace(pixelSize * m_ss);
         if (!m_faceA)
         {
             FT_Done_FreeType(lib);
@@ -133,6 +134,28 @@ namespace vt
             FT_Done_FreeType((FT_Library)m_lib);
             m_lib = NULL;
         }
+        if (m_csInit)
+        {
+            EnterCriticalSection(&m_cs);
+            m_cache.clear();
+            LeaveCriticalSection(&m_cs);
+        }
+    }
+
+    void GlyphSource::SetSupersample(int ss)
+    {
+        if (ss < 1) ss = 1;
+        if (ss > 4) ss = 4;
+        const int old = m_ss;
+        m_ss = ss;
+        if (!m_faceA || old == ss)
+            return;
+        // sizes are stored in target pixels, so the faces must be rebuilt
+        CloseFace(&m_faceB);
+        if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
+            return;
+        if (m_sizeCJK != m_sizeLatin)
+            m_faceB = OpenFace(m_sizeCJK * m_ss);
         if (m_csInit)
         {
             EnterCriticalSection(&m_cs);
@@ -171,7 +194,7 @@ namespace vt
             if (m_faceB)
             {
                 CloseFace(&m_faceB);
-                if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)m_sizeLatin))
+                if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
                     return;
             }
         }
@@ -179,9 +202,9 @@ namespace vt
         {
             if (!m_faceB)
             {
-                m_faceB = OpenFace(m_sizeCJK);
+                m_faceB = OpenFace(m_sizeCJK * m_ss);
             }
-            else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)m_sizeCJK))
+            else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)(m_sizeCJK * m_ss)))
             {
                 return;
             }
@@ -297,12 +320,15 @@ namespace vt
             const int advance = (gameAdvance > 0) ? gameAdvance : (int)(g->advance.x >> 6);
             cell.width = (unsigned char)(advance < 0 ? 0 : (advance > 255 ? 255 : advance));
 
-            // place the bitmap: baselineRow - bitmap_top gives the first row
-            const int x0 = g->bitmap_left;
-            const int y0 = m_baseline - g->bitmap_top;
-
-            if (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+            // Rasterise straight into the cell when the factor is 1, otherwise
+            // accumulate in supersampled space and box-filter down.  Placement
+            // happens in supersampled space, so the baseline stays exact for any
+            // factor (no bearing rounding).
+            const int ss = m_ss;
+            if (ss == 1)
             {
+                const int x0 = g->bitmap_left;
+                const int y0 = m_baseline - g->bitmap_top;
                 for (unsigned int r = 0; r < g->bitmap.rows; ++r)
                 {
                     const int y = y0 + (int)r;
@@ -314,35 +340,57 @@ namespace vt
                         const int x = x0 + (int)c;
                         if (x < 0 || x >= m_stride * 8)
                             continue;
-                        if (!((src[c >> 3] >> (7 - (c & 7))) & 1))
+                        const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+                            ? (((src[c >> 3] >> (7 - (c & 7))) & 1) ? 255 : 0)
+                            : src[c];
+                        if (!cov)
                             continue;
-                        cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                        cell.cov[y * 24 + x] = 255;
+                        cell.cov[y * 24 + x] = (unsigned char)cov;
+                        if (cov >= 128)
+                            cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
                     }
                 }
             }
             else
             {
+                static unsigned short acc[24 * 32];
+                memset(acc, 0, sizeof(acc));
+
+                const int w = m_stride * 8;
                 for (unsigned int r = 0; r < g->bitmap.rows; ++r)
                 {
-                    const int y = y0 + (int)r;
-                    if (y < 0 || y >= m_lines)
+                    const int sy = m_baseline * ss - g->bitmap_top + (int)r;
+                    if (sy < 0 || sy >= m_lines * ss)
                         continue;
                     const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
                     for (unsigned int c = 0; c < g->bitmap.width; ++c)
                     {
-                        const int x = x0 + (int)c;
-                        if (x < 0 || x >= m_stride * 8)
+                        const int sx = g->bitmap_left + (int)c;
+                        if (sx < 0 || sx >= w * ss)
                             continue;
-                        const unsigned char cov = src[c];
+                        const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+                            ? (((src[c >> 3] >> (7 - (c & 7))) & 1) ? 255 : 0)
+                            : src[c];
                         if (!cov)
                             continue;
-                        cell.cov[y * 24 + x] = cov;
-                        if (cov < 128)
-                            continue;
-                        cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+                        unsigned short* a = acc + (sy / ss) * w + (sx / ss);
+                        *a = (unsigned short)((*a + cov > 65535) ? 65535 : (*a + cov));
                     }
                 }
+
+                const int div = ss * ss;
+                for (int y = 0; y < m_lines; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        int cov = acc[y * w + x] / div;
+                        if (cov > 255)
+                            cov = 255;
+                        if (!cov)
+                            continue;
+                        cell.cov[y * 24 + x] = (unsigned char)cov;
+                        if (cov >= 128)
+                            cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+                    }
             }
 
             if (m_fit)

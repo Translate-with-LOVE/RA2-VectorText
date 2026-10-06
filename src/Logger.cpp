@@ -44,6 +44,7 @@ namespace vt
         int   g_cfgDarkening = 0;
         double g_cfgGamma    = 1.0;
         bool  g_cfgVecMetrics = false;
+        int   g_cfgSS        = 2;
         double g_cfgAdvScale  = 1.0;
 
         struct Entry
@@ -187,6 +188,9 @@ namespace vt
             g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
             g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
             g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
+            g_cfgSS         = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
+            if (g_cfgSS < 1) g_cfgSS = 1;
+            if (g_cfgSS > 4) g_cfgSS = 4;
             {
                 char m[32] = { 0 };
                 GetPrivateProfileStringA("VectorText", "Metrics", "game", m, sizeof(m), ini);
@@ -566,6 +570,7 @@ namespace vt
         double Gamma()           { Load(); return g_cfgGamma; }
         bool VectorMetrics()     { Load(); return g_cfgVecMetrics; }
         double AdvanceScale()    { Load(); return g_cfgAdvScale; }
+        int  Supersample()       { Load(); return g_cfgSS; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {

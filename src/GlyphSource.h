@@ -58,6 +58,10 @@ namespace vt
         // the intended cure for antialiased text looking too light at small sizes.
         void SetStemDarkening(int amount) { m_darkening = amount; }
 
+        // Supersampling factor (1 = off, 2 = rasterise at 2x and box-downsample).
+        // More accurate coverage at small sizes: cleaner edges, better weight.
+        void SetSupersample(int ss);
+
         bool Ready() const { return m_faceA != NULL; }
         bool AntiAlias() const { return m_aa; }
         void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
@@ -97,6 +101,7 @@ namespace vt
         bool  m_fit;
         bool  m_aa;
         int   m_darkening;
+        int   m_ss;
         const char* m_path;
         int   m_weight;
 

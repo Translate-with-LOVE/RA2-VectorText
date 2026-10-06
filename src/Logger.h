@@ -54,6 +54,7 @@ namespace vt
         double Gamma();                    // coverage gamma for the AA path
         bool VectorMetrics();              // true: our own advances (natural metrics)
         double AdvanceScale();             // Metrics=scaled: advance = game * scale
+        int  Supersample();                // 1 = off, 2 = rasterise at 2x
         int  ConfigInt(const char* key, int def);
         void ConfigStr(const char* key, const char* def, char* out, int cch);
     }
