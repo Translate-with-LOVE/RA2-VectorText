@@ -200,7 +200,7 @@ int main(int argc, char** argv)
     const char* fntPath = "..\\..\\..\\game.fnt";
     const char* outPath = "strings_sheet.bmp";
     int top = 40, minCount = 2, aa = 1, maxWidth = WIDTH - 8;
-    int wght = 400, darkening = 0, subpixel = 1; double gamma = 1.0;
+    int wght = 400, darkening = 0, subpixel = 1; double gamma = 1.0; const char* metrics = "scaled"; double advScale = 1.05;
 
     for (int i = 1; i < argc - 1; ++i)
     {
@@ -215,6 +215,8 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--darkening")) darkening = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--gamma"))     gamma = atof(argv[++i]);
         else if (!strcmp(argv[i], "--subpixel"))  subpixel = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--metrics"))   metrics = argv[++i];
+        else if (!strcmp(argv[i], "--advscale"))  advScale = atof(argv[++i]);
     }
 
     // the tool loads the same INI the DLL would
@@ -225,8 +227,8 @@ int main(int argc, char** argv)
                      "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
                      "FontWeight=%d\nStemDarkening=%d\nGamma=%.2f\nSubpixel=%d\n"
                      "FontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n"
-                     "Metrics=scaled\nAdvanceScale=1.05\n",
-                aa ? 1 : 0, wght, darkening, gamma, subpixel);
+                     "Metrics=%s\nAdvanceScale=%.2f\n",
+                aa ? 1 : 0, wght, darkening, gamma, subpixel, metrics, advScale);
         fclose(ini);
     }
 
