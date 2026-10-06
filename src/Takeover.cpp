@@ -120,7 +120,7 @@ namespace vt
             // rasterised monochrome.  Thresholding grayscale coverage at 128
             // hollows out thin serif strokes (seen in-game), because most edge
             // pixels of a 13 px serif glyph sit below 50% coverage.
-            const bool useAA = Cfg::AntiAlias() && Cfg::Mode() == Cfg::Mode_Draw;
+            const bool useAA = Cfg::AntiAlias() && (Cfg::Mode() == Cfg::Mode_Draw || Cfg::Mode() == Cfg::Mode_AA);
             g_src.SetAntiAlias(useAA);
 
             const DWORD t0 = GetTickCount();
@@ -312,6 +312,75 @@ namespace vt
             slot[0] = cell->width;                           // same value as before
             memcpy(slot + 1, cell->bits, symbolBytes - 1);
             SetStage(6);                                     // engine data now holds our cell
+            ++g_drawn;
+            return true;
+        }
+
+        // ------------------------------------------------------------------
+        //  Mode=aa: antialiased text with zero control-flow modification.
+        // ------------------------------------------------------------------
+        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg)
+        {
+            if (!g_tried)
+                Init();
+            if (!bitFont || !g_ready)
+                return false;
+
+            const unsigned char* bf = (const unsigned char*)bitFont;
+            const unsigned char* internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
+            if (!internal)
+                return false;
+
+            void* base = *(void* const*)(bf + BF_BUFFER);
+            const int pitch = *(const int*)(bf + BF_PITCH);
+            if (!base || pitch <= 0)
+                return false;
+
+            const unsigned short* symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
+            const unsigned int symbolBytes = *(const unsigned int*)(internal + IF_SYMBOLBYTES);
+            unsigned char* bitmaps = *(unsigned char* const*)(internal + IF_BITMAPS);
+            const int lines = *(const int*)(internal + IF_LINES);
+            if (!symTable || !bitmaps || lines != g_src.Lines())
+                return false;
+            if (symbolBytes != 1 + (unsigned int)(g_src.StrideBytes() * lines))
+                return false;
+
+            const unsigned int idx = symTable[ch & 0xFFFF];
+            if (idx == 0)
+                return false;
+
+            unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
+            const int advance = slot[0];
+
+            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
+            if (!cell)
+                return false;
+
+            const unsigned short color = (colorArg == -1)
+                ? *(const unsigned short*)(bf + BF_COLOR)
+                : (unsigned short)colorArg;
+
+            const int* bounds = (const int*)(bf + BF_BOUNDS);
+            Target t;
+            t.base  = (unsigned short*)base;
+            t.pitch = pitch;
+            t.clipL = bounds[0] > 0 ? bounds[0] : 0;
+            t.clipT = bounds[1] > 0 ? bounds[1] : 0;
+            t.clipR = bounds[2] < pitch - 1 ? bounds[2] : pitch - 1;
+            t.clipB = bounds[3];
+            if (t.clipR < t.clipL || t.clipB < t.clipT)
+                return false;
+
+            // 1) our antialiased pixels go in first ...
+            DrawCellAA(t, *cell, x, y, lines, color, RGB565);
+
+            // 2) ... and the engine's own pass must draw nothing over them, so
+            //    its glyph bitmap is zeroed.  The advance byte stays, which
+            //    keeps layout and every measurement identical to the original.
+            if (slot[1] || slot[symbolBytes - 1])
+                memset(slot + 1, 0, symbolBytes - 1);
+
+            SetStage(6);
             ++g_drawn;
             return true;
         }

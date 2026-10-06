@@ -374,6 +374,26 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         }
     }
 
+    // Mode=aa: our antialiased pixels + the engine's glyph blanked, so the
+    // engine's own pass draws nothing and the call flow is never modified.
+    if (vt::Cfg::Mode() == vt::Cfg::Mode_AA && wch != 0)
+    {
+        bool drawn = false;
+        __try
+        {
+            drawn = vt::Takeover::DrawAA((void*)(uintptr_t)R->ECX(), wch, x, y, color);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            drawn = false;
+            vt::Takeover::NoteException();
+            vt::Log::Note("FALLBACK aa-exception wch=U+%04X x=%d y=%d", wch, x, y);
+        }
+        if (drawn)
+            vt::Log::Count(vt::Hook_BitFont_Blit);
+        return 0;                               // engine runs, draws nothing
+    }
+
     // Mode=swap: hand the engine our glyph data instead of drawing ourselves.
     // No control flow is modified, so this path cannot upset the stack.
     if (vt::Cfg::Mode() == vt::Cfg::Mode_Swap && wch != 0)

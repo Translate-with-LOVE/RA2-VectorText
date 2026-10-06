@@ -39,6 +39,17 @@ namespace vt
         // Returns true when the font data now holds our glyph.
         bool SwapGlyph(void* bitFont, unsigned int ch);
 
+        // Mode=aa: antialiased text without touching the call flow.
+        //   1. we blend our vector glyph into the game's 16-bit surface
+        //      ourselves (that is where the antialiasing comes from),
+        //   2. we zero the *bitmap* of the engine's glyph slot for this
+        //      character (the advance byte stays), so the engine's own pass
+        //      writes nothing over our pixels,
+        //   3. the hook returns 0: the engine runs normally, its epilogue
+        //      restores the registers, and its return value (X + advance) is
+        //      the correct pen position.
+        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg);
+
         // Read-only field dump, logged once per distinct BitFont object.  Runs
         // in observe mode too, so a single safe run proves (or disproves) the
         // runtime layout the takeover relies on before draw mode is enabled.

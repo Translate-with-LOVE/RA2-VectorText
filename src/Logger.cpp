@@ -168,6 +168,7 @@ namespace vt
             if      (!_stricmp(mode, "off"))     g_cfgMode = Cfg::Mode_Off;
             else if (!_stricmp(mode, "draw"))    g_cfgMode = Cfg::Mode_Draw;
             else if (!_stricmp(mode, "swap"))    g_cfgMode = Cfg::Mode_Swap;
+            else if (!_stricmp(mode, "aa"))      g_cfgMode = Cfg::Mode_AA;
             else                                 g_cfgMode = Cfg::Mode_Observe;
 
             GetPrivateProfileStringA("VectorText", "FontFile",
@@ -379,6 +380,8 @@ namespace vt
                 WriteLine("===================================================================");
                 WriteLine(g_cfgMode == Cfg::Mode_Draw
                     ? " VectorText M1 -- vector text takeover ACTIVE (Mode=draw, own pixel writes)"
+                    : g_cfgMode == Cfg::Mode_AA
+                    ? " VectorText M1 -- vector glyphs ACTIVE (Mode=aa, antialiased, no skip)"
                     : g_cfgMode == Cfg::Mode_Swap
                     ? " VectorText M1 -- vector glyphs ACTIVE (Mode=swap, engine draws our data)"
                     : " VectorText M1 -- observation only, no drawing behaviour is changed");
@@ -399,7 +402,7 @@ namespace vt
                 return;
             EnterCriticalSection(&g_cs);
             WriteSummary(true);
-            if (g_cfgMode == Cfg::Mode_Draw || g_cfgMode == Cfg::Mode_Swap)
+            if (g_cfgMode != Cfg::Mode_Observe && g_cfgMode != Cfg::Mode_Off)
             {
                 unsigned long long drawn = 0, skipped = 0, failed = 0, unknown = 0;
                 Takeover::Stats(&drawn, &skipped, &failed, &unknown);
