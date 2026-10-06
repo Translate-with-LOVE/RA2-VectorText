@@ -37,7 +37,7 @@ namespace vt
     // M1 configuration (VectorText.ini, read lazily in-process like the logger)
     namespace Cfg
     {
-        enum Mode { Mode_Off = 0, Mode_Observe = 1, Mode_Draw = 2 };
+        enum Mode { Mode_Off = 0, Mode_Observe = 1, Mode_Draw = 2, Mode_Swap = 3 };
 
         void Load();                       // idempotent; called by the first accessor
         int  Mode();

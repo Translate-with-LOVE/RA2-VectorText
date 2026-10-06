@@ -374,6 +374,26 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         }
     }
 
+    // Mode=swap: hand the engine our glyph data instead of drawing ourselves.
+    // No control flow is modified, so this path cannot upset the stack.
+    if (vt::Cfg::Mode() == vt::Cfg::Mode_Swap && wch != 0)
+    {
+        bool swapped = false;
+        __try
+        {
+            swapped = vt::Takeover::SwapGlyph((void*)(uintptr_t)R->ECX(), wch);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            swapped = false;
+            vt::Takeover::NoteException();
+            vt::Log::Note("FALLBACK swap-exception wch=U+%04X", wch);
+        }
+        if (swapped)
+            vt::Log::Count(vt::Hook_BitFont_Blit);
+        return 0;                               // the engine draws (our) glyph
+    }
+
     if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw && wch != 0)
     {
         int newX = x;

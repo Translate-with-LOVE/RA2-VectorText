@@ -253,6 +253,63 @@ namespace vt
             return true;
         }
 
+        // ------------------------------------------------------------------
+        //  Mode=swap: replace the glyph *data* in the engine's own font tables.
+        //
+        //  The bytes we write are exactly the bytes the engine reads: one width
+        //  byte followed by strideBytes*lines 1bpp rows.  So the engine's Blit
+        //  draws our vector glyph with its own addressing, clipping, colour,
+        //  shadow and reveal logic -- and we never touch the stack or the
+        //  instruction pointer.  Idempotent: the slot is compared first, which
+        //  also makes it survive a font reload.
+        // ------------------------------------------------------------------
+        bool SwapGlyph(void* bitFont, unsigned int ch)
+        {
+            if (!g_tried)
+                Init();
+            if (!bitFont || !g_ready)
+                return false;
+
+            const unsigned char* bf = (const unsigned char*)bitFont;
+            const unsigned char* internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
+            if (!internal)
+                return false;
+
+            const unsigned short* symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
+            const unsigned int symbolBytes = *(const unsigned int*)(internal + IF_SYMBOLBYTES);
+            unsigned char* bitmaps = *(unsigned char* const*)(internal + IF_BITMAPS);
+            const int lines = *(const int*)(internal + IF_LINES);
+
+            if (!symTable || !bitmaps || lines != g_src.Lines())
+                return false;
+
+            // the slot must hold exactly: width byte + stride*lines bitmap bytes
+            if (symbolBytes != 1 + (unsigned int)(g_src.StrideBytes() * lines))
+                return false;
+
+            const unsigned int idx = symTable[ch & 0xFFFF];
+            if (idx == 0)
+                return false;
+
+            unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
+
+            const int advance = slot[0];                     // the original advance
+            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
+            if (!cell)
+                return false;
+
+            // compare before writing: idempotent and cheap (49 bytes)
+            if (slot[0] == cell->width &&
+                memcmp(slot + 1, cell->bits, symbolBytes - 1) == 0)
+                return true;
+
+            slot[0] = cell->width;                           // same value as before
+            memcpy(slot + 1, cell->bits, symbolBytes - 1);
+            SetStage(6);                                     // engine data now holds our cell
+            ++g_drawn;
+            return true;
+        }
+
         void NoteException()
         {
             ++g_reason[R_Exception];

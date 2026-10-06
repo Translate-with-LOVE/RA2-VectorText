@@ -172,6 +172,14 @@ int main(int argc, char** argv)
     for (int i = 0; i < W * H; ++i) g_surf[i] = BG;
     InitObjects();
 
+    // snapshot the original glyph bytes *before* any hook runs, so case 5 can
+    // prove the swap really replaced them
+    static unsigned char g_origGlyph[64];
+    {
+        const unsigned short idx = g_map[0x4E2D];
+        if (idx) memcpy(g_origGlyph, (const void*)(g_bitmaps + (size_t)(idx - 1) * g_symbolSize), g_symbolSize);
+    }
+
     // ---- 1. a mapped character, mapped by game.fnt -------------------------
     printf("\n1) draw mode, character with a game.fnt glyph (U+4E2D)\n");
     {
@@ -250,6 +258,53 @@ int main(int argc, char** argv)
             CHECK(greenPix > 0, "the argument colour reached the surface (%d px)", greenPix);
         else
             CHECK(InkCount() == 0, "observe mode wrote nothing (%d)", InkCount());
+    }
+
+    // ---- 5. swap mode: our cell must replace the engine's own glyph data ---
+    printf("\n5) swap mode: the engine's font data now holds our glyph\n");
+    {
+        const unsigned int ch = 0x4E2D;
+        const unsigned short idx = g_map[ch];
+        if (idx == 0)
+        {
+            printf("  [skip] game.fnt has no glyph for U+%04X\n", ch);
+        }
+        else
+        {
+            unsigned char* slot = (unsigned char*)(g_bitmaps + (size_t)(idx - 1) * g_symbolSize);
+            static unsigned char before[64];
+            memcpy(before, slot, g_symbolSize);
+
+            BlitCall call;
+            REGISTERS r;
+            DWORD espBefore = 0;
+            const DWORD ret = DriveBlit(blit, ch, 8, 4, -1, &call, &r, &espBefore);
+
+            if (!strcmp(mode, "swap"))
+            {
+                CHECK(ret == 0 && r.esp == espBefore, "no skip at all: returns 0, ESP untouched");
+                CHECK(memcmp(g_origGlyph, slot, g_symbolSize) != 0,
+                      "the font's glyph data differs from the original game.fnt bytes");
+                CHECK(slot[0] == before[0], "advance byte unchanged (%u)", (unsigned)slot[0]);
+
+                static unsigned char after[64];
+                memcpy(after, slot, g_symbolSize);
+                DriveBlit(blit, ch, 8, 4, -1, &call, &r, NULL);
+                CHECK(memcmp(after, slot, g_symbolSize) == 0, "second call is idempotent");
+
+                // the engine will read these bytes: they must be a valid 1bpp cell
+                int ink = 0;
+                for (int i = 1; i < g_symbolSize; ++i)
+                    for (int b = 0; b < 8; ++b)
+                        if (slot[i] & (0x80 >> b)) ++ink;
+                CHECK(ink > 10, "the swapped cell has ink (%d pixels)", ink);
+            }
+            else
+            {
+                CHECK(memcmp(before, slot, g_symbolSize) == 0,
+                      "mode=%s leaves the font data alone", mode);
+            }
+        }
     }
 
     printf("\n[*] failures=%d\n", g_fails);

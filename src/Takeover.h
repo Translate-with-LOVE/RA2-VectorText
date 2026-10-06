@@ -32,6 +32,13 @@ namespace vt
         // On success, *newX = x + <advance of the original glyph>.
         bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX);
 
+        // Mode=swap: write our rasterised cell into the *game's own* glyph slot
+        // in memory, then let the engine draw it.  No control flow, no stack
+        // manipulation -- the engine keeps doing addressing, clipping, shadows
+        // and the reveal ramp, it just draws vector shapes instead of bitmaps.
+        // Returns true when the font data now holds our glyph.
+        bool SwapGlyph(void* bitFont, unsigned int ch);
+
         // Read-only field dump, logged once per distinct BitFont object.  Runs
         // in observe mode too, so a single safe run proves (or disproves) the
         // runtime layout the takeover relies on before draw mode is enabled.
