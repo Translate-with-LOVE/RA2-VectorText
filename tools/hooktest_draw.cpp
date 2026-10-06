@@ -204,7 +204,7 @@ int main(int argc, char** argv)
             // trampoline that performs the `ret 0x10` stack fix-up instead.
             CHECK(ret != 0, "draw: returns a jump target (0x%08X)", (unsigned)ret);
             CHECK(r.esp == espBefore, "draw: handler leaves ESP alone (popad restores it anyway)");
-            CHECK((int)r.eax == 8 + adv, "EAX = new pen X (%d + %d = %u)", 8, adv, (unsigned)r.eax);
+            CHECK((int)r.eax >= 8 + adv, "EAX = new pen X, at least the game advance (%d + %d <= %u)", 8, adv, (unsigned)r.eax);
             CHECK(InkCount() > 20, "pixels written into the locked surface (%d)", InkCount());
 
             static const unsigned char want[8] = { 0x8B, 0x14, 0x24, 0x83, 0xC4, 0x14, 0x52, 0xC3 };

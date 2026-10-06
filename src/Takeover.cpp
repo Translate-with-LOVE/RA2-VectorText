@@ -312,16 +312,31 @@ namespace vt
                 return false;
             }
 
-            const unsigned char* glyph = bitmaps + (size_t)(idx - 1) * symbolBytes;
-            const int advance = glyph[0];                            // original advance
+            unsigned char* slot0 = (unsigned char*)(bitmaps + (size_t)(idx - 1) * symbolBytes);
+            const unsigned char* glyph = slot0;
+            // Same metrics logic as the antialiased path: this mode used to read
+            // the raw advance byte only, so Metrics=scaled/vector had no effect
+            // here and the glyphs were condensed harder than in aa mode.
+            // callerEsp is not available in this path (no hook stack), so the
+            // exception table is applied by the caller of TryBlit via `x`.
+            const int gameAdvance = glyph[0];
+            const double trueAdv = (g_advScale > 1.0) ? gameAdvance * g_advScale : (double)gameAdvance;
+            int published = gameAdvance;
+            const int phase = SubpixelPhase(x, trueAdv, &published);
+            const int advance = g_vecMetrics ? -1 : published;
 
-            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
+            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1, phase);
             if (!cell)
             {
                 ++g_failed;
                 ++g_reason[R_NoVectorGlyph];
                 return false;
             }
+
+            // the engine measures text by summing these bytes, so publishing our
+            // advance keeps measuring and drawing consistent
+            if (slot0 && *slot0 != cell->width)
+                *slot0 = cell->width;
 
             const unsigned short color = (colorArg == -1)
                 ? *(const unsigned short*)(bf + BF_COLOR)
