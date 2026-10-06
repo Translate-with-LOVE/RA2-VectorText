@@ -159,6 +159,25 @@ namespace vt
             return code;
         }
 
+        // The engine's own advance, remembered the first time a glyph slot is
+        // seen.  Without this, publishing our advance back into the font data
+        // fed our own value into the next call, so measurement, cache and
+        // drawing disagreed (overlapping Latin, cramped punctuation).
+        static unsigned char g_origAdv[16384];
+        static bool          g_origSeen[16384];
+
+        static int OrigAdvance(unsigned int idx, unsigned char current)
+        {
+            if (idx >= 16384)
+                return current;
+            if (!g_origSeen[idx])
+            {
+                g_origAdv[idx] = current;
+                g_origSeen[idx] = true;
+            }
+            return (int)g_origAdv[idx];
+        }
+
         bool SkipOriginal()
         {
             static int cached = -1;
@@ -324,7 +343,7 @@ namespace vt
             // here and the glyphs were condensed harder than in aa mode.
             // callerEsp is not available in this path (no hook stack), so the
             // exception table is applied by the caller of TryBlit via `x`.
-            const int gameAdvance = glyph[0];
+            const int gameAdvance = OrigAdvance(idx, glyph[0]);
             const double trueAdv = (g_advScale > 1.0) ? gameAdvance * g_advScale : (double)gameAdvance;
             int published = gameAdvance;
             const int phase = SubpixelPhase(x, trueAdv, &published);
@@ -433,7 +452,7 @@ namespace vt
             //                 engine's drawing AND measuring follow our metrics
             // Swap mode never sees the pen position (the engine draws the cell
             // itself), so no subpixel phase is possible here
-            const int gameAdvance = slot[0];                 // the engine's own advance byte
+            const int gameAdvance = OrigAdvance(idx, slot[0]);   // the engine's own advance (remembered)
             const int advance = g_vecMetrics ? -1
                               : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
             const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
@@ -488,7 +507,7 @@ namespace vt
             unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
             // Antialiased path: we know the pen position, so the fractional
             // advance can be carried across glyphs (subpixel positioning)
-            const int gameAdvance = slot[0];                 // the engine's own advance byte
+            const int gameAdvance = OrigAdvance(idx, slot[0]);   // the engine's own advance (remembered)
             // fixed-size UI boxes keep the engine's metrics: no scaling, no
             // natural advance, no subpixel drift
             const bool keepGame = CallerWantsGameMetrics(callerEsp);
