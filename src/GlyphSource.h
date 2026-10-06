@@ -74,7 +74,10 @@ namespace vt
         // gameAdvance: the advance taken from the game's font (Metrics=game).
         // Pass -1 to use the vector font's own advance (Metrics=freetype).
         // Returns NULL if the codepoint has no glyph.
-        const GlyphCell* Get(unsigned int codepoint, int gameAdvance);
+        // phase = horizontal subpixel shift in quarter pixels (0..3); it is
+        // baked into the rasterised coverage, so the engine can keep drawing at
+        // integer positions while the ink lands on a fractional pen position.
+        const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0);
 
         int  StrideBytes() const { return m_stride; }
         int  Lines() const { return m_lines; }

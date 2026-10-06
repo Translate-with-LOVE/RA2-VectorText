@@ -14,6 +14,37 @@ namespace vt
         static bool          g_tried = false;
         static bool          g_vecMetrics = false;   // Metrics=vector
         static double        g_advScale = 1.0;       // Metrics=scaled
+        static bool          g_subpixel = true;      // Subpixel=1
+
+        // ---- subpixel pen -------------------------------------------------
+        // The engine only ever deals in integer pen positions, so we keep the
+        // fractional part ourselves: the advance we publish is rounded, and the
+        // rounding error is accumulated here and baked into the next glyph as a
+        // quarter-pixel rasterisation phase.  Net effect: the ink lands on the
+        // ideal fractional positions while the engine sees a normal integer run.
+        static __declspec(thread) double t_ideal = 0.0;
+        static __declspec(thread) bool   t_hasIdeal = false;
+
+        static int SubpixelPhase(int x, double trueAdvance, int* published)
+        {
+            const int rounded = (int)floor(trueAdvance + 0.5);
+            if (published)
+                *published = rounded;
+            if (!g_subpixel)
+                return 0;
+
+            if (!t_hasIdeal || fabs(t_ideal - (double)x) > 2.0)
+            {
+                t_ideal = (double)x;                 // new run: anchor on the engine
+                t_hasIdeal = true;
+            }
+            double frac = t_ideal - (double)x;       // our ideal pen vs the engine
+            if (frac < -1.0) frac = -1.0;
+            if (frac >  1.0) frac =  1.0;
+            int phase = (int)floor(frac * 4.0 + 0.5) & 3;
+            t_ideal += trueAdvance;
+            return phase;
+        }
         static bool          g_ready = false;
         static unsigned long long g_drawn = 0, g_skipped = 0, g_failed = 0, g_unknown = 0;
 
@@ -152,6 +183,7 @@ namespace vt
             const char* ttf = Cfg::FontFile();
             g_vecMetrics = Cfg::VectorMetrics();
             g_advScale = Cfg::AdvanceScale();
+            g_subpixel = Cfg::ConfigInt("Subpixel", 1) != 0;
             // natural metrics means no horizontal condensing: the glyph keeps
             // its own width and we hand that width to the engine (see below)
             g_src.SetFitToAdvance(!g_vecMetrics && Cfg::FitToAdvance());
@@ -345,6 +377,8 @@ namespace vt
             // Metrics=game  : keep the engine's advance (layout byte-identical)
             // Metrics=vector: use FreeType's advance and write it back, so the
             //                 engine's drawing AND measuring follow our metrics
+            // Swap mode never sees the pen position (the engine draws the cell
+            // itself), so no subpixel phase is possible here
             const int gameAdvance = slot[0];                 // the engine's own advance byte
             const int advance = g_vecMetrics ? -1
                               : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
@@ -398,11 +432,15 @@ namespace vt
                 return false;
 
             unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
+            // Antialiased path: we know the pen position, so the fractional
+            // advance can be carried across glyphs (subpixel positioning)
             const int gameAdvance = slot[0];                 // the engine's own advance byte
-            const int advance = g_vecMetrics ? -1
-                              : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
+            const double trueAdv = (g_advScale > 1.0) ? gameAdvance * g_advScale : (double)gameAdvance;
+            int published = gameAdvance;
+            const int phase = SubpixelPhase(x, trueAdv, &published);
+            const int advance = g_vecMetrics ? -1 : published;
 
-            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1);
+            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1, phase);
             if (!cell)
                 return false;
 

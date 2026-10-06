@@ -267,13 +267,15 @@ namespace vt
         memcpy(cell.cov, tmpCov, sizeof(cell.cov));
     }
 
-    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance)
+    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase)
     {
         if (!m_faceA)
             return NULL;
+        phase &= 3;
 
-        // cache key: codepoint + which advance source was used
-        const unsigned int key = codepoint | (gameAdvance > 0 ? 0x80000000u : 0u);
+        // cache key: codepoint + which advance source was used + subpixel phase
+        const unsigned int key = codepoint | (gameAdvance > 0 ? 0x80000000u : 0u)
+                                          | ((unsigned int)phase << 29);
 
         EnterCriticalSection(&m_cs);
         std::map<unsigned int, GlyphCell>::iterator it = m_cache.find(key);
@@ -304,8 +306,22 @@ namespace vt
                 m_cache.clear();
 
             FT_Face face = (FT_Face)((codepoint >= m_cjkFrom && m_faceB) ? m_faceB : m_faceA);
+
+            // bake the subpixel phase in: a quarter-pixel horizontal delta makes
+            // FreeType shift the coverage, and TARGET_LIGHT keeps horizontal
+            // hinting from snapping it back onto the pixel grid
+            FT_Matrix mat;
+            FT_Vector delta;
+            mat.xx = 1 << 16; mat.xy = 0;
+            mat.yx = 0;       mat.yy = 1 << 16;
+            delta.x = (FT_Pos)(phase * 16);          // 1/4 px in 26.6
+            delta.y = 0;
+            FT_Set_Transform(face, &mat, phase ? &delta : NULL);
+
             const bool aa = m_aa;
-            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
+            const FT_Int32 loadFlags = phase
+                ? (FT_LOAD_TARGET_LIGHT | FT_LOAD_RENDER)
+                : ((aa ? FT_LOAD_TARGET_NORMAL : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER);
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             {
                 LeaveCriticalSection(&m_cs);
