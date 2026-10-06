@@ -191,7 +191,12 @@ int main(int argc, char** argv)
         const DWORD ret = DriveBlit(blit, 0x4E2D, 8, 4, -1, &call, &r, &espBefore);
         const int adv = GameAdvance(0x4E2D);
 
-        if (!strcmp(mode, "draw") || !strcmp(mode, "aa"))
+        if (!strcmp(mode, "aa"))
+        {
+            CHECK(ret == 0 && r.esp == espBefore, "aa: no skip at all (returns 0, ESP untouched)");
+            CHECK(InkCount() > 20, "aa: our antialiased pixels reached the surface (%d)", InkCount());
+        }
+        else if (!strcmp(mode, "draw"))
         {
             CHECK(ret == call.ret, "returns the caller's return address (0x%08X)", (unsigned)ret);
             CHECK(r.esp == espBefore + 4 + 0x10, "ESP popped return address + 4 args (0x%08X -> 0x%08X)",
