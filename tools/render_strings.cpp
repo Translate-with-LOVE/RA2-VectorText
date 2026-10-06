@@ -229,7 +229,7 @@ int main(int argc, char** argv)
                      "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
                      "FontWeight=%d\nStemDarkening=%d\nGamma=%.2f\nSubpixel=%d\n"
                      "FontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n"
-                     "Metrics=%s\nAdvanceScale=%.2f\n",
+                     "Metrics=%s\nMetricsExcept=0x00553199\nAdvanceScale=%.2f\n",
                 aa ? 1 : 0, wght, darkening, gamma, subpixel, metrics, advScale);
         fclose(ini);
     }
