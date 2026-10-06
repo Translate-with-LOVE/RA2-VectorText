@@ -103,6 +103,15 @@ namespace vt
     void SetLinearBlend(bool on) { BuildLuts(); g_linearBlend = on; }
     void SetDither(bool on)      { g_dither = on; }
 
+    static int  g_outline = 0;          // 0 = off, 1 = one-pixel ring
+    static unsigned short g_outlineColor = 0x0000;
+
+    void SetOutline(int pixels, unsigned short color)
+    {
+        g_outline = (pixels <= 0) ? 0 : (pixels > 2 ? 2 : pixels);
+        g_outlineColor = color;
+    }
+
     // 4x4 Bayer matrix, centred on zero, scaled to +/- half a destination LSB
     static const int k_bayer[4][4] =
     {
@@ -209,6 +218,29 @@ namespace vt
                     continue;
                 if (g_covLutReady && g_gamma != 1.0)
                     cov = g_covLut[cov];
+
+                // outline (SDF-style dilation): the ring is the dilated coverage
+                // minus the glyph coverage, painted before the glyph itself, so
+                // small text stays readable on busy backgrounds
+                if (g_outline)
+                {
+                    int dil = cov;
+                    for (int oy = -1; oy <= 1; ++oy)
+                        for (int ox = -1; ox <= 1; ++ox)
+                        {
+                            const int cy = r + oy, cx = c + ox;
+                            if (cy < 0 || cx < 0 || cy >= cellLines || cx >= 24)
+                                continue;
+                            int n = cell.cov[cy * 24 + cx];
+                            if (g_covLutReady && g_gamma != 1.0)
+                                n = g_covLut[n];
+                            if (n > dil)
+                                dil = n;
+                        }
+                    int ring = dil - cov;
+                    if (ring > 0)
+                        row[sx] = Blend(row[sx], g_outlineColor, ring, fmt);
+                }
 
                 row[sx] = Blend(row[sx], color, cov, fmt);
                 ++written;

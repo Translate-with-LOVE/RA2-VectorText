@@ -235,6 +235,7 @@ namespace vt
             SetCoverageGamma(Cfg::Gamma());
             SetLinearBlend(Cfg::LinearBlend());
             SetDither(Cfg::Dither());
+            SetOutline(Cfg::Outline(), Cfg::OutlineColor());
 
             const DWORD t0 = GetTickCount();
 

@@ -57,6 +57,8 @@ namespace vt
         int  Supersample();                // 1 = off, 2 = rasterise at 2x
         bool LinearBlend();                // 32-bit path: blend in linear light
         bool Dither();                     // 32-bit path: dither the 16-bit quantisation
+        int  Outline();                    // SDF-style outline width in pixels
+        unsigned short OutlineColor();     // the ring colour (16-bit surface word)
 
         // MetricsExcept: code addresses whose function must keep the engine's own
         // metrics even when Metrics=scaled/vector (fixed-size UI boxes)

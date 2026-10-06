@@ -61,4 +61,8 @@ namespace vt
     // quantisation to 16-bit (kills the banding of plain 5/6/5 rounding)
     void SetLinearBlend(bool on);
     void SetDither(bool on);
+
+    // Outline: dilate the coverage by pixels and paint the ring in color`r
+    // before the glyph (SDF-style), which is what keeps small text readable.
+    void SetOutline(int pixels, unsigned short color);
 }

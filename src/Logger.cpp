@@ -47,6 +47,8 @@ namespace vt
         int   g_cfgSS        = 2;
         bool  g_cfgLinear    = true;
         bool  g_cfgDither    = true;
+        int   g_cfgOutline   = 0;
+        unsigned int g_cfgOutlineColor = 0x0000;
         unsigned int g_cfgExcept[8] = { 0 };
         int   g_cfgExceptN   = 0;
         double g_cfgAdvScale  = 1.0;
@@ -195,6 +197,12 @@ namespace vt
             g_cfgSS         = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
             g_cfgLinear     = GetPrivateProfileIntA("VectorText", "LinearBlend", 1, ini) != 0;
             g_cfgDither     = GetPrivateProfileIntA("VectorText", "Dither", 1, ini) != 0;
+            g_cfgOutline    = GetPrivateProfileIntA("VectorText", "Outline", 0, ini);
+            {
+                char oc[32] = { 0 };
+                GetPrivateProfileStringA("VectorText", "OutlineColor", "0x0000", oc, sizeof(oc), ini);
+                g_cfgOutlineColor = (unsigned int)strtoul(oc, NULL, 0) & 0xFFFFu;
+            }
             {
                 char ex[256] = { 0 };
                 GetPrivateProfileStringA("VectorText", "MetricsExcept", "", ex, sizeof(ex), ini);
@@ -589,6 +597,8 @@ namespace vt
         int  Supersample()       { Load(); return g_cfgSS; }
         bool LinearBlend()       { Load(); return g_cfgLinear; }
         bool Dither()            { Load(); return g_cfgDither; }
+        int  Outline()           { Load(); return g_cfgOutline; }
+        unsigned short OutlineColor() { Load(); return (unsigned short)g_cfgOutlineColor; }
         int  MetricsExceptCount(){ Load(); return g_cfgExceptN; }
         unsigned int MetricsExceptAt(int i) { Load(); return (i >= 0 && i < g_cfgExceptN) ? g_cfgExcept[i] : 0u; }
 
