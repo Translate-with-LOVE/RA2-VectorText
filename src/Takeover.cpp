@@ -122,6 +122,8 @@ namespace vt
             // pixels of a 13 px serif glyph sit below 50% coverage.
             const bool useAA = Cfg::AntiAlias() && (Cfg::Mode() == Cfg::Mode_Draw || Cfg::Mode() == Cfg::Mode_AA);
             g_src.SetAntiAlias(useAA);
+            g_src.SetStemDarkening(Cfg::StemDarkening());
+            SetCoverageGamma(Cfg::Gamma());
 
             const DWORD t0 = GetTickCount();
 

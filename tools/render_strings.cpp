@@ -200,6 +200,7 @@ int main(int argc, char** argv)
     const char* fntPath = "..\\..\\..\\game.fnt";
     const char* outPath = "strings_sheet.bmp";
     int top = 40, minCount = 2, aa = 1, maxWidth = WIDTH - 8;
+    int wght = 400, darkening = 0; double gamma = 1.0;
 
     for (int i = 1; i < argc - 1; ++i)
     {
@@ -210,16 +211,20 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--min-count")) minCount = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--aa"))        aa = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--width"))     maxWidth = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--wght"))      wght = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--darkening")) darkening = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--gamma"))     gamma = atof(argv[++i]);
     }
 
     // the tool loads the same INI the DLL would
     FILE* ini = fopen("VectorText.ini", "w");
     if (ini)
     {
-        fprintf(ini, "[VectorText]\nEnabled=1\nMode=draw\nAntiAlias=%d\n"
+        fprintf(ini, "[VectorText]\nEnabled=1\nMode=aa\nAntiAlias=%d\n"
                      "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
-                     "FontWeight=400\nFontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n",
-                aa ? 1 : 0);
+                     "FontWeight=%d\nStemDarkening=%d\nGamma=%.2f\n"
+                     "FontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n",
+                aa ? 1 : 0, wght, darkening, gamma);
         fclose(ini);
     }
 
@@ -261,7 +266,18 @@ int main(int argc, char** argv)
     vt::Target t;
     t.base = g_surf; t.pitch = WIDTH; t.clipL = 0; t.clipR = WIDTH - 1;
 
+    // ink = sum of coverage in a row band (counts partial pixels too, which is
+    // exactly what the eye integrates when judging stroke weight)
+    auto InkIn = [](int yTop) -> int {
+        int sum = 0;
+        for (int yy = yTop; yy < yTop + 20 && yy < g_height; ++yy)
+            for (int xx = 0; xx < WIDTH; ++xx)
+                if (g_surf[yy * WIDTH + xx]) ++sum;
+        return sum;
+    };
+
     unsigned long long nChars = 0, nDrawn = 0, nRefused = 0;
+    long long inkOrig = 0, inkOurs = 0;
     std::map<unsigned int, unsigned long long> used, missFnt, missFT;
     int widest = 8;
 
@@ -272,6 +288,8 @@ int main(int argc, char** argv)
 
         // ---- row 1: the original bitmap glyphs (dim) --------------------
         t.clipT = y; t.clipB = y + g_lines - 1;
+        const int inkBeforeOrig = 0;
+        int inc0 = InkIn(y);
         {
             int x = 4;
             for (size_t k = 0; k < w.size(); ++k)
@@ -284,9 +302,11 @@ int main(int argc, char** argv)
             }
             if (x > widest) widest = x;
         }
+        inkOrig += InkIn(y) - inc0;
 
         // ---- row 2: our glyphs, through the real takeover path ----------
         y += 20;
+        int inc1 = InkIn(y);
         *(int*)(g_bitFont + 0x30) = 0;
         *(int*)(g_bitFont + 0x34) = y;
         *(int*)(g_bitFont + 0x38) = WIDTH - 1;
@@ -317,6 +337,7 @@ int main(int argc, char** argv)
             }
             if (x > widest) widest = x;
         }
+        inkOurs += InkIn(y) - inc1;
         y += 20;
     }
 
@@ -328,6 +349,8 @@ int main(int argc, char** argv)
     printf("[*] takeover : drawn=%llu (%.2f%%)  refused=%llu (%.2f%%)\n",
            nDrawn, nChars ? 100.0 * nDrawn / nChars : 0.0,
            nRefused, nChars ? 100.0 * nRefused / nChars : 0.0);
+    printf("[*] ink      : original=%lld ours=%lld  ratio=%.3f  (wght=%d darkening=%d gamma=%.2f)\n",
+           inkOrig, inkOurs, inkOrig ? (double)inkOurs / (double)inkOrig : 0.0, wght, darkening, gamma);
     printf("[*] sheet    : %s (%dx%d)\n", outPath, g_usedW, g_height);
 
     printf("\n[!] characters with NO glyph in game.fnt (engine draws its own placeholder,\n"

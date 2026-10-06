@@ -54,6 +54,10 @@ namespace vt
         // pixel writer blend into the game's 16-bit surfaces.
         void SetAntiAlias(bool on);
 
+        // FreeType's stem darkening: thickens stems during rendering, which is
+        // the intended cure for antialiased text looking too light at small sizes.
+        void SetStemDarkening(int amount) { m_darkening = amount; }
+
         bool Ready() const { return m_faceA != NULL; }
         bool AntiAlias() const { return m_aa; }
         void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
@@ -92,6 +96,7 @@ namespace vt
         int   m_baseline;
         bool  m_fit;
         bool  m_aa;
+        int   m_darkening;
         const char* m_path;
         int   m_weight;
 

@@ -3,6 +3,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_MODULE_H
 
 #include <string.h>
 #include <stdlib.h>
@@ -12,7 +13,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         InitializeCriticalSection(&m_cs);
@@ -98,6 +99,13 @@ namespace vt
         if (FT_Init_FreeType(&lib))
             return false;
         m_lib = lib;
+
+        // stem darkening must be set before the faces are created
+        if (m_darkening > 0)
+        {
+            FT_UInt amount = (FT_UInt)m_darkening;
+            FT_Property_Set(lib, "truetype", "darkening", &amount);
+        }
 
         m_faceA = OpenFace(pixelSize);
         if (!m_faceA)

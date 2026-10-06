@@ -41,6 +41,8 @@ namespace vt
         bool  g_cfgAA        = true;
         bool  g_cfgFallback  = true;
         bool  g_cfgProbe     = true;
+        int   g_cfgDarkening = 0;
+        double g_cfgGamma    = 1.0;
 
         struct Entry
         {
@@ -182,6 +184,14 @@ namespace vt
             g_cfgAA         = GetPrivateProfileIntA("VectorText", "AntiAlias", 1, ini) != 0;
             g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
             g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
+            g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
+            {
+                char buf[32] = { 0 };
+                GetPrivateProfileStringA("VectorText", "Gamma", "1.0", buf, sizeof(buf), ini);
+                g_cfgGamma = atof(buf);
+                if (g_cfgGamma < 0.5) g_cfgGamma = 0.5;
+                if (g_cfgGamma > 3.0) g_cfgGamma = 3.0;
+            }
 
             if (g_cfgSizeLatin < 6)  g_cfgSizeLatin = 6;
             if (g_cfgSizeCJK < 6)    g_cfgSizeCJK = 6;
@@ -537,6 +547,8 @@ namespace vt
         bool AntiAlias()         { Load(); return g_cfgAA; }
         bool FallbackOnError()   { Load(); return g_cfgFallback; }
         bool Probe()             { Load(); return g_cfgProbe; }
+        int  StemDarkening()     { Load(); return g_cfgDarkening; }
+        double Gamma()           { Load(); return g_cfgGamma; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {

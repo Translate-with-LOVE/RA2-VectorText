@@ -154,6 +154,7 @@ int main(int argc, char** argv)
     printf("[*] vector   : %s @ %dpx (cjk %dpx) wght=%d baselineRow=%d fit=%d\n\n",
            ttf, size, cjkSize > 0 ? cjkSize : size, wght, baseline, nofit ? 0 : 1);
 
+    long long inkFnt = 0, inkOurs = 0, covOurs = 0;
     for (const wchar_t* p = chars; *p; ++p)
     {
         const unsigned int cp = (unsigned int)*p;
@@ -185,6 +186,21 @@ int main(int argc, char** argv)
         printf("U+%04X  fnt w=%-3d rows %2d..%2d cols %2d..%2d   ours w=%-3d rows %2d..%2d cols %2d..%2d\n",
                cp, fntWidth, fFirst, fLast, fc0, fc1,
                cell ? cell->width : -1, vFirst, vLast, vc0, vc1);
+
+        if (fntRows)
+            for (int r = 0; r < g_lines; ++r)
+                for (int b = 0; b < g_stride; ++b)
+                    for (int k = 0; k < 8; ++k)
+                        if (fntRows[r * g_stride + b] & (0x80 >> k)) ++inkFnt;
+        if (cell)
+        {
+            for (int r = 0; r < g_lines; ++r)
+                for (int b = 0; b < g_stride; ++b)
+                    for (int k = 0; k < 8; ++k)
+                        if (cell->bits[r * g_stride + b] & (0x80 >> k)) ++inkOurs;
+            for (int r = 0; r < g_lines; ++r)
+                for (int x = 0; x < 24; ++x) covOurs += cell->cov[r * 24 + x];
+        }
 
         if (summary) { printf("\n"); continue; }
         char a[40][64], b[40][64];

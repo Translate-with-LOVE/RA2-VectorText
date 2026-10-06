@@ -1,8 +1,34 @@
 #include "PixelWriter.h"
+#include <math.h>
 
 namespace vt
 {
     const ColorFormat RGB565 = { 11, 5, 5, 6, 0, 5 };
+
+    // Coverage gamma: linear coverage makes antialiased small text look thin and
+    // hazy, because the perceived weight of partial pixels is sub-linear.  A
+    // gamma table (cov' = 255 * (cov/255)^(1/gamma), gamma > 1) restores the
+    // weight the eye expects.  Built once, applied per blended pixel.
+    static unsigned char g_covLut[256];
+    static bool g_covLutReady = false;
+    static double g_gamma = 1.0;
+
+    void SetCoverageGamma(double gamma)
+    {
+        if (gamma < 0.5) gamma = 0.5;
+        if (gamma > 3.0) gamma = 3.0;
+        g_gamma = gamma;
+        for (int i = 0; i < 256; ++i)
+        {
+            const double v = (double)i / 255.0;
+            double o = (gamma == 1.0) ? v : pow(v, 1.0 / gamma);
+            int iv = (int)(o * 255.0 + 0.5);
+            if (iv < 0) iv = 0;
+            if (iv > 255) iv = 255;
+            g_covLut[i] = (unsigned char)iv;
+        }
+        g_covLutReady = true;
+    }
 
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color)
@@ -83,9 +109,11 @@ namespace vt
                 if (sx > t.clipR)
                     break;
 
-                const int cov = cell.cov[r * 24 + c];
+                int cov = cell.cov[r * 24 + c];
                 if (!cov)
                     continue;
+                if (g_covLutReady && g_gamma != 1.0)
+                    cov = g_covLut[cov];
 
                 row[sx] = Blend(row[sx], color, cov, fmt);
                 ++written;
