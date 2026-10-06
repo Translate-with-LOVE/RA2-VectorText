@@ -45,6 +45,8 @@ namespace vt
         double g_cfgGamma    = 1.0;
         bool  g_cfgVecMetrics = false;
         int   g_cfgSS        = 2;
+        bool  g_cfgLinear    = true;
+        bool  g_cfgDither    = true;
         unsigned int g_cfgExcept[8] = { 0 };
         int   g_cfgExceptN   = 0;
         double g_cfgAdvScale  = 1.0;
@@ -191,6 +193,8 @@ namespace vt
             g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
             g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
             g_cfgSS         = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
+            g_cfgLinear     = GetPrivateProfileIntA("VectorText", "LinearBlend", 1, ini) != 0;
+            g_cfgDither     = GetPrivateProfileIntA("VectorText", "Dither", 1, ini) != 0;
             {
                 char ex[256] = { 0 };
                 GetPrivateProfileStringA("VectorText", "MetricsExcept", "", ex, sizeof(ex), ini);
@@ -583,6 +587,8 @@ namespace vt
         bool VectorMetrics()     { Load(); return g_cfgVecMetrics; }
         double AdvanceScale()    { Load(); return g_cfgAdvScale; }
         int  Supersample()       { Load(); return g_cfgSS; }
+        bool LinearBlend()       { Load(); return g_cfgLinear; }
+        bool Dither()            { Load(); return g_cfgDither; }
         int  MetricsExceptCount(){ Load(); return g_cfgExceptN; }
         unsigned int MetricsExceptAt(int i) { Load(); return (i >= 0 && i < g_cfgExceptN) ? g_cfgExcept[i] : 0u; }
 

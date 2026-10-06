@@ -64,6 +64,54 @@ namespace vt
         return written;
     }
 
+    // ---------------------------------------------------------------------
+    //  32-bit compositing path
+    //
+    //  The game's surface is 16-bit (5/6/5), so blending straight into it
+    //  quantises every partial pixel and the rounding error shows up as
+    //  banding on large antialiased areas.  Here the blend is computed in a
+    //  32-bit linear-light domain with a 12-bit fixed point table, and only the
+    //  final value is quantised - with an ordered (Bayer) offset that turns the
+    //  remaining quantisation into a fine dither instead of a hard step.
+    // ---------------------------------------------------------------------
+    static bool g_linearBlend = false;
+    static bool g_dither = false;
+
+    static unsigned short g_srgbToLin[256];        // 0..4095, gamma 2.2
+    static unsigned short g_linToSrgb[4096];       // back to 0..255
+    static bool g_lutReady = false;
+
+    static void BuildLuts()
+    {
+        if (g_lutReady)
+            return;
+        for (int i = 0; i < 256; ++i)
+        {
+            double lin = pow((double)i / 255.0, 2.2);
+            int v = (int)(lin * 4095.0 + 0.5);
+            g_srgbToLin[i] = (unsigned short)(v < 0 ? 0 : (v > 4095 ? 4095 : v));
+        }
+        for (int i = 0; i < 4096; ++i)
+        {
+            double srgb = pow((double)i / 4095.0, 1.0 / 2.2);
+            int v = (int)(srgb * 255.0 + 0.5);
+            g_linToSrgb[i] = (unsigned short)(v < 0 ? 0 : (v > 255 ? 255 : v));
+        }
+        g_lutReady = true;
+    }
+
+    void SetLinearBlend(bool on) { BuildLuts(); g_linearBlend = on; }
+    void SetDither(bool on)      { g_dither = on; }
+
+    // 4x4 Bayer matrix, centred on zero, scaled to +/- half a destination LSB
+    static const int k_bayer[4][4] =
+    {
+        {  0,  8,  2, 10 },
+        { 12,  4, 14,  6 },
+        {  3, 11,  1,  9 },
+        { 15,  7, 13,  5 }
+    };
+
     unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt)
     {
         if (coverage >= 255)
@@ -79,9 +127,56 @@ namespace vt
         const int dg = (dst >> fmt.greenShift) & gMask, sg = (src >> fmt.greenShift) & gMask;
         const int db = (dst >> fmt.blueShift) & bMask, sb = (src >> fmt.blueShift) & bMask;
 
-        const int r = dr + ((sr - dr) * coverage) / 255;
-        const int g = dg + ((sg - dg) * coverage) / 255;
-        const int b = db + ((sb - db) * coverage) / 255;
+        int r, g, b;
+        if (g_linearBlend)
+        {
+            BuildLuts();
+            // scale the 5/6/5 samples up to 8 bits, blend in linear light
+            const int dr8 = (dr * 255) / rMask, sr8 = (sr * 255) / rMask;
+            const int dg8 = (dg * 255) / gMask, sg8 = (sg * 255) / gMask;
+            const int db8 = (db * 255) / bMask, sb8 = (sb * 255) / bMask;
+
+            const int drl = g_srgbToLin[dr8], srl = g_srgbToLin[sr8];
+            const int dgl = g_srgbToLin[dg8], sgl = g_srgbToLin[sg8];
+            const int dbl = g_srgbToLin[db8], sbl = g_srgbToLin[sb8];
+
+            const int rl = drl + ((srl - drl) * coverage) / 255;
+            const int gl = dgl + ((sgl - dgl) * coverage) / 255;
+            const int bl = dbl + ((sbl - dbl) * coverage) / 255;
+
+            const int r8 = g_linToSrgb[rl < 0 ? 0 : (rl > 4095 ? 4095 : rl)];
+            const int g8 = g_linToSrgb[gl < 0 ? 0 : (gl > 4095 ? 4095 : gl)];
+            const int b8 = g_linToSrgb[bl < 0 ? 0 : (bl > 4095 ? 4095 : bl)];
+
+            r = (r8 * rMask + 127) / 255;
+            g = (g8 * gMask + 127) / 255;
+            b = (b8 * bMask + 127) / 255;
+        }
+        else
+        {
+            r = dr + ((sr - dr) * coverage) / 255;
+            g = dg + ((sg - dg) * coverage) / 255;
+            b = db + ((sb - db) * coverage) / 255;
+        }
+
+        if (g_dither)
+        {
+            // x/y of the destination pixel is not available here, so the dither
+            // uses the destination *value* plus the coverage as its coordinates:
+            // stable for a given pixel and enough to break up flat banding
+            const int bi = ((dst ^ (coverage << 1)) >> 1) & 3;
+            const int bj = ((dst >> 5) ^ coverage) & 3;
+            const int off = k_bayer[bi][bj] - 8;              // -8..+7
+            const int rs = 1 << (8 - fmt.redBits);
+            const int gs = 1 << (8 - fmt.greenBits);
+            const int bs = 1 << (8 - fmt.blueBits);
+            r += (off * rs) / 32;
+            g += (off * gs) / 32;
+            b += (off * bs) / 32;
+            if (r < 0) r = 0; if (r > rMask) r = rMask;
+            if (g < 0) g = 0; if (g > gMask) g = gMask;
+            if (b < 0) b = 0; if (b > bMask) b = bMask;
+        }
 
         return (unsigned short)((r << fmt.redShift) | (g << fmt.greenShift) | (b << fmt.blueShift));
     }

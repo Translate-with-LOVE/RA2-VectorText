@@ -233,6 +233,8 @@ namespace vt
             g_src.SetSupersample(Cfg::Supersample());
             g_src.SetFitMode(Cfg::ConfigInt("FitMode", 0) != 0 ? 1 : 0);
             SetCoverageGamma(Cfg::Gamma());
+            SetLinearBlend(Cfg::LinearBlend());
+            SetDither(Cfg::Dither());
 
             const DWORD t0 = GetTickCount();
 

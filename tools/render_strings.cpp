@@ -201,7 +201,7 @@ int main(int argc, char** argv)
     const char* outPath = "strings_sheet.bmp";
     int top = 40, minCount = 2, aa = 1, maxWidth = WIDTH - 8;
     int wght = 400, darkening = 0, subpixel = 1; double gamma = 1.0; const char* metrics = "scaled"; double advScale = 1.05;
-    bool exceptHit = false;
+    bool exceptHit = false; int linear = 1, dither = 1;
 
     for (int i = 1; i < argc - 1; ++i)
     {
@@ -219,6 +219,8 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--metrics"))   metrics = argv[++i];
         else if (!strcmp(argv[i], "--advscale"))  advScale = atof(argv[++i]);
         else if (!strcmp(argv[i], "--except-hit")) exceptHit = true;
+        else if (!strcmp(argv[i], "--linear"))    linear = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--dither"))    dither = atoi(argv[++i]);
     }
 
     // the tool loads the same INI the DLL would
@@ -229,8 +231,8 @@ int main(int argc, char** argv)
                      "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
                      "FontWeight=%d\nStemDarkening=%d\nGamma=%.2f\nSubpixel=%d\n"
                      "FontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n"
-                     "Metrics=%s\nMetricsExcept=0x00553199\nAdvanceScale=%.2f\n",
-                aa ? 1 : 0, wght, darkening, gamma, subpixel, metrics, advScale);
+                     "Metrics=%s\nMetricsExcept=0x00553199\nAdvanceScale=%.2f\nLinearBlend=%d\nDither=%d\n",
+                aa ? 1 : 0, wght, darkening, gamma, subpixel, metrics, advScale, linear, dither);
         fclose(ini);
     }
 

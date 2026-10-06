@@ -55,6 +55,8 @@ namespace vt
         bool VectorMetrics();              // true: our own advances (natural metrics)
         double AdvanceScale();             // Metrics=scaled: advance = game * scale
         int  Supersample();                // 1 = off, 2 = rasterise at 2x
+        bool LinearBlend();                // 32-bit path: blend in linear light
+        bool Dither();                     // 32-bit path: dither the 16-bit quantisation
 
         // MetricsExcept: code addresses whose function must keep the engine's own
         // metrics even when Metrics=scaled/vector (fixed-size UI boxes)

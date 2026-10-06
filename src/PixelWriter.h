@@ -56,4 +56,9 @@ namespace vt
 
     // Coverage gamma for the antialiased path (1.0 = linear, >1 = heavier text).
     void SetCoverageGamma(double gamma);
+
+    // 32-bit compositing path: blend in linear light and dither the final
+    // quantisation to 16-bit (kills the banding of plain 5/6/5 rounding)
+    void SetLinearBlend(bool on);
+    void SetDither(bool on);
 }
