@@ -430,16 +430,6 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
             vt::Log::Note("FALLBACK blit-exception wch=U+%04X x=%d y=%d", wch, x, y);
         }
 
-        if (drawn && !vt::Takeover::SkipOriginal())
-        {
-            // Bisect mode: our pixels are written, but the engine still runs its
-            // own Blit on top, so the call flow is untouched.  Nothing visible
-            // changes; this only proves our drawing is safe in the real game.
-            vt::Takeover::SetStage(9);
-            vt::Log::Count(vt::Hook_BitFont_Blit);
-            return 0;
-        }
-
         if (drawn)
         {
             vt::Log::Count(vt::Hook_BitFont_Blit);

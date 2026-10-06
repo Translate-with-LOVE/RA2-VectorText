@@ -238,6 +238,7 @@ int main(int argc, char** argv)
         const unsigned short other = 0x07E0;             // pure green
         vt::Takeover::TryBlit(g_bitFont, (unsigned)text[0], 4, 4, other, &newX);
         int found = 0, pure = 0;
+        bool onlyGreen = true;
         for (int y = 4; y < 4 + g_lines; ++y)
             for (int x = 4; x < 40; ++x)
             {
@@ -245,8 +246,11 @@ int main(int argc, char** argv)
                 if (c == BG) continue;
                 ++found;
                 if (c == other) ++pure;
+                if ((c & 0xF81F) || !(c & 0x07E0)) onlyGreen = false;
             }
-        CHECK(found > 0 && (aa ? pure > 0 : pure == found),
+        // A thin AA glyph need not contain any fully covered pixel. Verify
+        // the requested colour channels, rather than assuming an opaque core.
+        CHECK(found > 0 && onlyGreen && (aa || pure == found),
               "arg colour used: %d lit, %d exactly 0x%04X (aa=%d)", found, pure, other, aa);
     }
 

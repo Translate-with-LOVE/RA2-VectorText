@@ -4,6 +4,7 @@
 
 # build outputs (build.bat / selftest.bat write here)
 build/
+backups/
 *.obj
 *.lib
 *.exp

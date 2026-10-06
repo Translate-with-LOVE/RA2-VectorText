@@ -52,7 +52,8 @@ namespace vt
                    unsigned short color, int reveal);
 
     unsigned short BlendTowardWhite(unsigned short color, int ratio, const ColorFormat& fmt);
-    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt);
+    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt,
+                         int x = 0, int y = 0);
 
     // Coverage gamma for the antialiased path (1.0 = linear, >1 = heavier text).
     void SetCoverageGamma(double gamma);

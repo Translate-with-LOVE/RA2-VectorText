@@ -44,6 +44,9 @@ namespace vt
         // CJK fills the whole 16-row cell.  Matching that needs two sizes.
         // cjkFrom defaults to U+2E80 (CJK radicals supplement).
         void SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom = 0x2E80);
+        // Optional Latin face chosen for the game's narrow ASCII advances.
+        // The CJK face stays on FontFile; no character proportions are changed.
+        bool SetLatinFont(const char* path);
 
         // When set, a glyph whose ink is wider than the engine advance is
         // condensed horizontally to fit its cell (keeps layout identical and
@@ -62,12 +65,12 @@ namespace vt
         // More accurate coverage at small sizes: cleaner edges, better weight.
         void SetSupersample(int ss);
 
-        // FitMode: 0 = condense (merge columns only, distorts the aspect ratio),
-        //          1 = scale (shrink both axes by the same factor, keeps proportions)
+        // Fitting preserves proportions and happens on the outline before
+        // rendering. Kept for compatibility with older INI files/tests.
         void SetFitMode(int mode) { m_fitMode = mode; }
 
-        // Align each character class to the ink rows the original 16x16 bitmap
-        // font uses for that class (CJK 0, lower case 3, upper/digits 4).
+        // Legacy switch retained for callers. Glyphs share the font baseline;
+        // individual characters are never stretched or moved by their ink box.
         void SetClassAlign(bool on) { m_classAlign = on; }
 
         bool Ready() const { return m_faceA != NULL; }
@@ -76,13 +79,13 @@ namespace vt
         void* FaceHandle() const { return m_faceA; }      // Latin face
         void* FaceHandleFor(unsigned int codepoint) const
         {
-            return (codepoint >= m_cjkFrom && m_faceB) ? m_faceB : m_faceA;
+            return (UsesCJKFace(codepoint) && m_faceB) ? m_faceB : m_faceA;
         }
 
         // gameAdvance: the advance taken from the game's font (Metrics=game).
         // Pass -1 to use the vector font's own advance (Metrics=freetype).
         // Returns NULL if the codepoint has no glyph.
-        // phase = horizontal subpixel shift in quarter pixels (0..3); it is
+        // phase = signed horizontal subpixel shift in quarter pixels (-3..3); it is
         // baked into the rasterised coverage, so the engine can keep drawing at
         // integer positions while the ink lands on a fractional pen position.
         const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0);
@@ -96,7 +99,8 @@ namespace vt
         void SetAAInternal(bool on) { m_aa = on; }        // used by SetAntiAlias
 
     private:
-        void* OpenFace(int pixelSize);
+        bool UsesCJKFace(unsigned int codepoint) const;
+        void* OpenFace(int pixelSize, const char* path = NULL);
         void  CloseFace(void** face);
 
         void* m_lib;                          // FT_Library
@@ -114,17 +118,17 @@ namespace vt
         int   m_darkening;
         int   m_ss;
         int   m_fitMode;
-        bool  m_vertFill;
         int   m_darkErr[3];
         bool  m_classAlign;
     public:
         const int* StemDarkeningErrors() const { return m_darkErr; }
     private:
         const char* m_path;
+        char  m_latinPath[MAX_PATH];
         int   m_weight;
 
         CRITICAL_SECTION m_cs;
         bool  m_csInit;
-        std::map<unsigned int, GlyphCell> m_cache;
+        std::map<unsigned long long, GlyphCell> m_cache;
     };
 }

@@ -69,11 +69,6 @@ namespace vt
         void SetStage(int stage);
         void NoteDirectionFlag();
 
-        // SkipOriginal=0 draws our glyph and then lets the engine draw its own
-        // on top: identical drawing code, but the call flow is never modified.
-        // Used to bisect "our drawing" from "our stack manipulation" in-game.
-        bool SkipOriginal();
-
         // The stack fix-up used instead of R->ESP (which Syringe drops).
         void* SkipTrampoline();
 

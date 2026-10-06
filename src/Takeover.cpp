@@ -180,22 +180,13 @@ namespace vt
             return (int)g_origAdv[idx];
         }
 
-        bool SkipOriginal()
-        {
-            static int cached = -1;
-            if (cached < 0)
-                cached = Cfg::ConfigInt("SkipOriginal", 1) != 0 ? 1 : 0;
-            return cached != 0;
-        }
-
         bool SawDirectionFlag() { return g_sawDF; }
 
         void DiagLine(char* out, int cch)
         {
             _snprintf_s(out, (size_t)cch, _TRUNCATE,
-                        "lastStage=%s(%d) sawDF=%d skipped=%d skipOriginal=%d",
-                        StageName(), g_stage, g_sawDF ? 1 : 0, g_skipLogged,
-                        SkipOriginal() ? 1 : 0);
+                        "lastStage=%s(%d) sawDF=%d skipped=%d",
+                        StageName(), g_stage, g_sawDF ? 1 : 0, g_skipLogged);
         }
 
         // Log the first few skip-the-callee operations in full, so a crash in
@@ -269,6 +260,10 @@ namespace vt
                 return false;
             }
             g_src.SetSizes(Cfg::FontSizeLatin(), Cfg::FontSizeCJK());
+            static char latinFont[MAX_PATH] = { 0 };
+            Cfg::ConfigStr("FontFileLatin", "", latinFont, sizeof(latinFont));
+            if (latinFont[0])
+                Log::Note("Latin font %s: \"%s\"", g_src.SetLatinFont(latinFont) ? "ready" : "fallback", latinFont);
             g_ready = true;
             SetStage(2);
 
@@ -406,7 +401,7 @@ namespace vt
 
             ++g_drawn;
             if (newX)
-                *newX = x + advance;
+                *newX = x + cell->width;
             return true;
         }
 

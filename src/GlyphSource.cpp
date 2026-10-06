@@ -4,6 +4,7 @@
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
 #include FT_MODULE_H
+#include FT_OUTLINE_H
 
 #include <string.h>
 #include <stdlib.h>
@@ -13,9 +14,10 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_vertFill(false), m_darkErr{0,0,0}, m_classAlign(true),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_darkErr{0,0,0}, m_classAlign(true),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
+        m_latinPath[0] = 0;
         InitializeCriticalSection(&m_cs);
         m_csInit = true;
     }
@@ -39,13 +41,13 @@ namespace vt
         }
     }
 
-    void* GlyphSource::OpenFace(int pixelSize)
+    void* GlyphSource::OpenFace(int pixelSize, const char* path)
     {
         if (!m_lib || !m_path)
             return NULL;
 
         FT_Face face = NULL;
-        if (FT_New_Face((FT_Library)m_lib, m_path, 0, &face))
+        if (FT_New_Face((FT_Library)m_lib, path && *path ? path : m_path, 0, &face))
             return NULL;
 
         // Variable fonts: the default instance is often not the weight we want
@@ -93,6 +95,7 @@ namespace vt
         m_sizeLatin = pixelSize;
         m_sizeCJK   = pixelSize;
         m_path     = ttfPath;
+        m_latinPath[0] = 0;
         m_weight   = weight;
 
         FT_Library lib = NULL;
@@ -100,19 +103,13 @@ namespace vt
             return false;
         m_lib = lib;
 
-        // stem darkening must be set before the faces are created
+        // Auto-hinter properties are Boolean/module-specific, not a numeric
+        // "darkening" property on the TrueType driver. Record unsupported knobs.
+        memset(m_darkErr, 0, sizeof(m_darkErr));
         if (m_darkening > 0)
         {
-            // The documented knobs are module specific: CFF exposes
-            // "no-stem-darkening" and the auto-hinter "darkening"/"warping".
-            // Try them and RECORD what the library answered (the previous code
-            // used a property name that does not exist and ignored the error).
-            FT_UInt amount = (FT_UInt)m_darkening;
             FT_Bool noDark = 0;
-            FT_Error e1 = FT_Property_Set(lib, "cff", "no-stem-darkening", &noDark);
-            FT_Error e2 = FT_Property_Set(lib, "autofitter", "darkening", &amount);
-            FT_Error e3 = FT_Property_Set(lib, "truetype", "darkening", &amount);
-            m_darkErr[0] = (int)e1; m_darkErr[1] = (int)e2; m_darkErr[2] = (int)e3;
+            m_darkErr[0] = FT_Property_Set(lib, "autofitter", "no-stem-darkening", &noDark);
         }
 
         m_ss = (m_ss < 1) ? 1 : (m_ss > 4 ? 4 : m_ss);
@@ -162,7 +159,7 @@ namespace vt
         CloseFace(&m_faceB);
         if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
             return;
-        if (m_sizeCJK != m_sizeLatin)
+        if (m_sizeCJK != m_sizeLatin || m_latinPath[0])
             m_faceB = OpenFace(m_sizeCJK * m_ss);
         if (m_csInit)
         {
@@ -196,27 +193,14 @@ namespace vt
         if (!m_faceA)
             return;
 
-        // keep one face per distinct size so nothing thrashes per glyph
-        if (m_sizeCJK == m_sizeLatin)
-        {
-            if (m_faceB)
-            {
-                CloseFace(&m_faceB);
-                if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
-                    return;
-            }
-        }
-        else
-        {
-            if (!m_faceB)
-            {
-                m_faceB = OpenFace(m_sizeCJK * m_ss);
-            }
-            else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)(m_sizeCJK * m_ss)))
-            {
-                return;
-            }
-        }
+        if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
+            return;
+        if (m_sizeCJK == m_sizeLatin && !m_latinPath[0])
+            CloseFace(&m_faceB);
+        else if (!m_faceB)
+            m_faceB = OpenFace(m_sizeCJK * m_ss);
+        else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)(m_sizeCJK * m_ss)))
+            return;
 
         if (m_csInit)
         {
@@ -226,116 +210,35 @@ namespace vt
         }
     }
 
-    // Condense the drawn ink horizontally so it fits `advance` columns.
-    // Area/OR merging: 1bpp safe, keeps one-pixel-wide strokes, and preserves
-    // the vertical metrics (which is what the baseline depends on).
-    static void FitColumns(GlyphCell& cell, int advance, int strideBytes, int lines,
-                           int fitMode, int baseline)
+    bool GlyphSource::SetLatinFont(const char* path)
     {
-        if (advance <= 0)
-            return;
-
-        int minX = 1 << 30, maxX = -1;
-        for (int y = 0; y < lines; ++y)
-            for (int x = 0; x < strideBytes * 8; ++x)
-                if (cell.bits[y * strideBytes + (x >> 3)] & (0x80 >> (x & 7)))
-                {
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                }
-
-        if (maxX < 0 || maxX < advance)          // nothing to do
-            return;
-
-        const int inkW = maxX - minX + 1;
-        const int dstW = advance;                // the first `advance` columns are ours
-        unsigned char tmp[3 * 32];
-        unsigned char tmpCov[24 * 32];
-        memset(tmp, 0, sizeof(tmp));
-        memset(tmpCov, 0, sizeof(tmpCov));
-
-        if (fitMode == 0)
+        if (!m_faceA || !path || !*path)
+            return false;
+        void* latin = OpenFace(m_sizeLatin * m_ss, path);
+        if (!latin)
+            return false;
+        if (!m_faceB)
+            m_faceB = OpenFace(m_sizeCJK * m_ss);
+        if (!m_faceB)
         {
-            // --- condense: merge source columns into the available cells -----
-            // horizontally only, which distorts the aspect ratio (a 9 px Latin
-            // cap squeezed into a 7 px cell, CJK squeezed by 10-25%)
-            for (int y = 0; y < lines; ++y)
-            {
-                for (int t = 0; t < dstW; ++t)
-                {
-                    const int sBegin = minX + (t * inkW) / dstW;
-                    const int sEnd   = minX + (((t + 1) * inkW) / dstW) - 1;
-                    for (int s = sBegin; s <= sEnd && s <= maxX; ++s)
-                    {
-                        if (s < minX)
-                            continue;
-                        if (cell.cov[y * 24 + s] > tmpCov[y * 24 + t])
-                            tmpCov[y * 24 + t] = cell.cov[y * 24 + s];
-                        if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
-                            continue;
-                        tmp[y * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
-                    }
-                }
-            }
+            CloseFace(&latin);
+            return false;
         }
-        else
-        {
-            // --- scale: shrink BOTH axes by the same factor ------------------
-            // The glyph keeps its proportions; it only gets a little smaller.
-            // Rows shrink towards the baseline and columns towards the pen
-            // origin, so placement and line height stay exactly as before.
-            int minY = 1 << 30, maxY = -1;
-            for (int y = 0; y < lines; ++y)
-                for (int x = minX; x <= maxX; ++x)
-                    if (cell.bits[y * strideBytes + (x >> 3)] & (0x80 >> (x & 7)))
-                    {
-                        if (y < minY) minY = y;
-                        if (y > maxY) maxY = y;
-                    }
-            if (maxY < 0)
-            {
-                memcpy(cell.bits, tmp, sizeof(cell.bits));
-                memcpy(cell.cov, tmpCov, sizeof(cell.cov));
-                return;
-            }
+        EnterCriticalSection(&m_cs);
+        CloseFace(&m_faceA);
+        m_faceA = latin;
+        strncpy_s(m_latinPath, path, _TRUNCATE);
+        m_cache.clear();
+        LeaveCriticalSection(&m_cs);
+        return true;
+    }
 
-            const int inkH = maxY - minY + 1;
-            const int dstH = (inkH * dstW + inkW - 1) / inkW;    // same factor, rounded up
-            const int base = baseline;
-
-            for (int ty = 0; ty < dstH; ++ty)
-            {
-                // destination row, kept on the same side of the baseline
-                int dy = (minY >= base) ? base + ((ty * inkH) / dstH) + (minY - base)
-                                        : base - (((dstH - ty) * (base - minY) + dstH - 1) / dstH);
-                if (dy < 0 || dy >= lines)
-                    continue;
-                const int yBegin = minY + (ty * inkH) / dstH;
-                const int yEnd   = minY + (((ty + 1) * inkH) / dstH) - 1;
-                for (int t = 0; t < dstW; ++t)
-                {
-                    const int xBegin = minX + (t * inkW) / dstW;
-                    const int xEnd   = minX + (((t + 1) * inkW) / dstW) - 1;
-                    for (int s = xBegin; s <= xEnd && s <= maxX; ++s)
-                    {
-                        if (s < minX)
-                            continue;
-                        for (int y = yBegin; y <= yEnd && y <= maxY; ++y)
-                        {
-                            if (y < minY)
-                                continue;
-                            if (cell.cov[y * 24 + s] > tmpCov[dy * 24 + t])
-                                tmpCov[dy * 24 + t] = cell.cov[y * 24 + s];
-                            if (!(cell.bits[y * strideBytes + (s >> 3)] & (0x80 >> (s & 7))))
-                                continue;
-                            tmp[dy * strideBytes + (t >> 3)] |= (unsigned char)(0x80 >> (t & 7));
-                        }
-                    }
-                }
-            }
-        }
-        memcpy(cell.bits, tmp, sizeof(cell.bits));
-        memcpy(cell.cov, tmpCov, sizeof(cell.cov));
+    bool GlyphSource::UsesCJKFace(unsigned int cp) const
+    {
+        // These characters lie below U+2E80 but belong with Chinese typography
+        // in this game's text. ASCII punctuation stays with the Latin face.
+        return cp >= m_cjkFrom || cp == 0x2013 || cp == 0x2014 || cp == 0x2015 ||
+               (cp >= 0x2018 && cp <= 0x201F) || cp == 0x2025 || cp == 0x2026;
     }
 
     const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase)
@@ -355,11 +258,12 @@ namespace vt
         // the cell rasterised for the old advance - measuring, caching and
         // drawing then disagreed (overlapping Latin, cramped punctuation).
         const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
-        const unsigned int key = codepoint | ((unsigned int)advKey << 23)
-                                          | ((unsigned int)((phase + 3) & 7) << 31);
+        const unsigned long long key = (unsigned long long)codepoint
+            | ((unsigned long long)advKey << 32)
+            | ((unsigned long long)(phase + 3) << 40);
 
         EnterCriticalSection(&m_cs);
-        std::map<unsigned int, GlyphCell>::iterator it = m_cache.find(key);
+        std::map<unsigned long long, GlyphCell>::iterator it = m_cache.find(key);
         if (it != m_cache.end())
         {
             const GlyphCell* hit = &it->second;   // map nodes are stable
@@ -373,7 +277,7 @@ namespace vt
         // in practice while making concurrent calls safe.
         EnterCriticalSection(&m_cs);
         {
-            std::map<unsigned int, GlyphCell>::iterator again = m_cache.find(key);
+            std::map<unsigned long long, GlyphCell>::iterator again = m_cache.find(key);
             if (again != m_cache.end())
             {
                 const GlyphCell* hit = &again->second;
@@ -386,7 +290,7 @@ namespace vt
             if (m_cache.size() >= 16384)
                 m_cache.clear();
 
-            FT_Face face = (FT_Face)((codepoint >= m_cjkFrom && m_faceB) ? m_faceB : m_faceA);
+            FT_Face face = (FT_Face)FaceHandleFor(codepoint);
 
             // bake the subpixel phase in: a quarter-pixel horizontal delta makes
             // FreeType shift the coverage, and TARGET_LIGHT keeps horizontal
@@ -404,7 +308,7 @@ namespace vt
             // preserves one-pixel horizontal strokes at these sizes.  Fully
             // unhinted outlines (FT_LOAD_NO_HINTING) lost them, which is why
             // horizontal strokes turned into dotted lines.
-            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_MONO) | FT_LOAD_RENDER;
+            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_MONO) | FT_LOAD_NO_BITMAP;
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             {
                 LeaveCriticalSection(&m_cs);
@@ -416,195 +320,109 @@ namespace vt
             GlyphCell cell;
             memset(&cell, 0, sizeof(cell));
 
-            const int advance = (gameAdvance > 0) ? gameAdvance : (int)(g->advance.x >> 6);
+            const int advance = (gameAdvance > 0) ? gameAdvance : (int)((g->advance.x + 32 * m_ss) / (64 * m_ss));
             cell.width = (unsigned char)(advance < 0 ? 0 : (advance > 255 ? 255 : advance));
 
-            // Rasterise straight into the cell when the factor is 1, otherwise
-            // accumulate in supersampled space and box-filter down.  Placement
-            // happens in supersampled space, so the baseline stays exact for any
-            // factor (no bearing rounding).
+            // Fit the OUTLINE uniformly before rendering. Never resize an
+            // already rasterised bitmap or stretch ideographs to fill 16 rows.
+            // Keep the same baseline for all letters, including descenders.
             const int ss = m_ss;
-            if (ss == 1)
+            if (g->format == FT_GLYPH_FORMAT_OUTLINE && g->outline.n_points)
             {
-                const int x0 = g->bitmap_left;
-                const int y0 = m_baseline - g->bitmap_top;
-                for (unsigned int r = 0; r < g->bitmap.rows; ++r)
+                FT_BBox box;
+                FT_Outline_Get_CBox(&g->outline, &box);
+                const double unit = 64.0 * ss;
+                const double inkW = (box.xMax - box.xMin) / unit;
+                const double inkH = (box.yMax - box.yMin) / unit;
+                const bool smallMark = codepoint == '.' || codepoint == ',' ||
+                    codepoint == ':' || codepoint == ';' || codepoint == '!' || codepoint == '?' ||
+                    codepoint == 0x3001 || codepoint == 0x3002 || codepoint == 0xFF0C ||
+                    codepoint == 0xFF0E || codepoint == 0xFF1A || codepoint == 0xFF1B ||
+                    codepoint == 0xFF01 || codepoint == 0xFF1F;
+                const bool opening = codepoint == '(' || codepoint == '[' || codepoint == '{' ||
+                    codepoint == 0xFF08 || codepoint == 0x3010 || codepoint == 0x300C ||
+                    codepoint == 0x300E || codepoint == 0x2018 || codepoint == 0x201C;
+                const bool closing = codepoint == ')' || codepoint == ']' || codepoint == '}' ||
+                    codepoint == 0xFF09 || codepoint == 0x3011 || codepoint == 0x300D ||
+                    codepoint == 0x300F || codepoint == 0x2019 || codepoint == 0x201D;
+                const bool dash = codepoint == 0x2013 || codepoint == 0x2014 || codepoint == 0x2015;
+                const bool symbol = smallMark || opening || closing || dash ||
+                    codepoint == 0x2025 || codepoint == 0x2026;
+                const bool fitCell = m_fit && gameAdvance > 0;
+                // Narrow legacy punctuation cells need fractional breathing room.
+                // Reserve only 1/4 pixel per side; outline scaling remains uniform.
+                const double inset = fitCell && symbol && gameAdvance >= 2 ? 0.25 : 0.0;
+                const double limit = fitCell ? (double)gameAdvance : 24.0;
+                const double available = limit - 2.0 * inset;
+                double scale = 1.0;
+                if (fitCell && inkW > available)
+                    scale = available / inkW;
+                if (inkH > m_lines && scale > m_lines / inkH)
+                    scale = m_lines / inkH;
+                mat.xx = mat.yy = (FT_Fixed)(scale * 65536.0 + 0.5);
+                // The CBox already includes the initial phase. Reposition
+                // bearings that overflow the cell without changing the shape.
+                const double initialPhase = phase * 0.25;
+                double left = (box.xMin / unit - initialPhase) * scale + initialPhase;
+                double right = (box.xMax / unit - initialPhase) * scale + initialPhase;
+                double offset = 0.0;
+                if (fitCell && symbol)
                 {
-                    const int y = y0 + (int)r;
-                    if (y < 0 || y >= m_lines)
+                    // Align paired marks toward the text they enclose; centre
+                    // stops/colons in their existing cell. The pen never changes.
+                    double targetLeft = (limit - inkW * scale) * 0.5;
+                    if (opening) targetLeft = limit - inset - inkW * scale;
+                    if (closing) targetLeft = inset;
+                    offset = targetLeft - left;
+                }
+                if (right + offset > limit - inset) offset = limit - inset - right;
+                if (left + offset < inset) offset = inset - left;
+                delta.x = (FT_Pos)((initialPhase + offset) * unit);
+                // Translate only if the full outline would be vertically clipped.
+                const double top = m_baseline - box.yMax / unit * scale;
+                const double bottom = m_baseline - box.yMin / unit * scale;
+                double shiftY = top < 0.0 ? -top : 0.0;
+                if (bottom + shiftY > m_lines) shiftY = m_lines - bottom;
+                delta.y = (FT_Pos)(-shiftY * unit);
+                FT_Set_Transform(face, &mat, &delta);
+            }
+            if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags | FT_LOAD_RENDER))
+            {
+                LeaveCriticalSection(&m_cs);
+                return NULL;
+            }
+
+            // Area coverage from the high-resolution bitmap. Every source
+            // sample contributes to its target pixel, so no rows are skipped.
+            unsigned int acc[24 * 32] = { 0 };
+            for (unsigned int r = 0; r < g->bitmap.rows; ++r)
+            {
+                const int sy = m_baseline * ss - g->bitmap_top + (int)r;
+                if (sy < 0 || sy >= m_lines * ss)
+                    continue;
+                const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
+                for (unsigned int c = 0; c < g->bitmap.width; ++c)
+                {
+                    const int sx = g->bitmap_left + (int)c;
+                    if (sx < 0 || sx >= m_stride * 8 * ss)
                         continue;
-                    const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
-                    for (unsigned int c = 0; c < g->bitmap.width; ++c)
-                    {
-                        const int x = x0 + (int)c;
-                        if (x < 0 || x >= m_stride * 8)
-                            continue;
-                        const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
-                            ? (((src[c >> 3] >> (7 - (c & 7))) & 1) ? 255 : 0)
-                            : src[c];
-                        if (!cov)
-                            continue;
-                        cell.cov[y * 24 + x] = (unsigned char)cov;
-                        if (cov >= 128)
-                            cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                    }
+                    const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
+                        ? (((src[c >> 3] >> (7 - (c & 7))) & 1) ? 255 : 0)
+                        : src[c];
+                    acc[(sy / ss) * 24 + sx / ss] += cov;
                 }
             }
-            else
-            {
-                static unsigned short acc[24 * 32];
-                memset(acc, 0, sizeof(acc));
-
-                const int w = m_stride * 8;
-
-                // Anti-clip: a vector ideograph reaches further above the baseline
-                // than the game's bitmap cell, so its top rows used to land above
-                // row 0 and were dropped - the visible "top of the glyph is cut"
-                // defect.  If the ink top would overflow, shift the whole glyph
-                // down by whole cell rows so the top is preserved.
-                const int ssTop = m_baseline * ss - g->bitmap_top;
-                int shiftRows = 0;
-                if (ssTop < 0)
-                    shiftRows = ((-ssTop) + ss - 1) / ss;
-
-                for (unsigned int r = 0; r < g->bitmap.rows; ++r)
+            const unsigned int div = ss * ss;
+            for (int y = 0; y < m_lines; ++y)
+                for (int x = 0; x < m_stride * 8; ++x)
                 {
-                    const int sy = ssTop + shiftRows * ss + (int)r;
-                    if (sy < 0 || sy >= m_lines * ss)
-                        continue;
-                    const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
-                    for (unsigned int c = 0; c < g->bitmap.width; ++c)
-                    {
-                        const int sx = g->bitmap_left + (int)c;
-                        if (sx < 0 || sx >= w * ss)
-                            continue;
-                        const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
-                            ? (((src[c >> 3] >> (7 - (c & 7))) & 1) ? 255 : 0)
-                            : src[c];
-                        if (!cov)
-                            continue;
-                        unsigned short* a = acc + (sy / ss) * w + (sx / ss);
-                        *a = (unsigned short)((*a + cov > 65535) ? 65535 : (*a + cov));
-                    }
+                    int cov = (acc[y * 24 + x] + div / 2) / div;
+                    cell.cov[y * 24 + x] = (unsigned char)cov;
+                    if (cov >= 128)
+                        cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
                 }
 
-                const int div = ss * ss;
-
-                for (int y = 0; y < m_lines; ++y)
-                    for (int x = 0; x < w; ++x)
-                    {
-                        int cov = acc[y * w + x] / div;
-                        if (cov > 255)
-                            cov = 255;
-                        if (!cov)
-                            continue;
-                        cell.cov[y * 24 + x] = (unsigned char)cov;
-                        if (cov >= 128)
-                            cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                    }
-            }
-
-            // Align the ink to the same row the original 16x16 bitmap uses for
-            // this class of character.  Measured from game.fnt itself:
-            //   CJK ideographs / fullwidth : ink top row 0
-            //   ASCII lower case           : ink top row 3
-            //   ASCII upper / digits / punct: ink top row 4
-            if (m_classAlign)
-            {
-                int top = -1, bot = -1;
-                for (int y = 0; y < m_lines && top < 0; ++y)
-                    for (int x = 0; x < m_stride * 8; ++x)
-                        if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
-                        {
-                            top = y;
-                            break;
-                        }
-                if (top >= 0)
-                {
-                    for (int y = m_lines - 1; y >= 0 && bot < 0; --y)
-                        for (int x = 0; x < m_stride * 8; ++x)
-                            if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
-                            {
-                                bot = y;
-                                break;
-                            }
-
-                    // game.fnt is a 16x16 bitmap face: ideographs fill all 16
-                    // rows, bottom-hugging punctuation sits in 12..15, lower
-                    // case ascenders start at 3 and x-height letters at 6.
-                    const bool cjkPunct = (codepoint >= 0x3001 && codepoint <= 0x3011) ||
-                                          codepoint == 0xFF0C || codepoint == 0xFF1A ||
-                                          codepoint == 0xFF1B || codepoint == 0xFF01 ||
-                                          codepoint == 0xFF1F || codepoint == '.' ||
-                                          codepoint == ',';
-                    const bool ascender = codepoint == 'b' || codepoint == 'd' || codepoint == 'f' ||
-                                          codepoint == 'h' || codepoint == 'k' || codepoint == 'l' ||
-                                          codepoint == 't';
-                    const int target = cjkPunct ? -1                        // bottom aligned
-                                     : (codepoint >= 0x2E80) ? 0
-                                     : (codepoint >= 'a' && codepoint <= 'z') ? (ascender ? 3 : 6) : 4;
-                    int dy = (target < 0) ? ((m_lines - 1) - bot) : (target - top);
-                    if (dy > 3) dy = 3;
-                    if (dy < -3) dy = -3;
-                    if (bot + dy > m_lines - 1) dy = (m_lines - 1) - bot;
-                    if (top + dy < 0) dy = -top;
-
-                    // Ideographs fill the whole 16x16 design box in game.fnt,
-                    // while a vector ideograph is shorter - stretch the ink rows
-                    // over 0..15 so the text occupies the same band.
-                    const bool ideograph = (codepoint >= 0x4E00 && codepoint <= 0x9FFF) ||
-                                           (codepoint >= 0xFF01 && codepoint <= 0xFF5E);
-                    if (ideograph && bot > top && (bot - top + 1) < m_lines)
-                    {
-                        unsigned char nb[3 * 32];
-                        unsigned char nc[24 * 32];
-                        memset(nb, 0, sizeof(nb));
-                        memset(nc, 0, sizeof(nc));
-                        for (int y = top; y <= bot; ++y)
-                        {
-                            int ny = ((y - top) * (m_lines - 1)) / (bot - top);
-                            if (ny < 0) ny = 0;
-                            if (ny > m_lines - 1) ny = m_lines - 1;
-                            for (int x = 0; x < m_stride * 8; ++x)
-                            {
-                                if (cell.cov[y * 24 + x] > nc[ny * 24 + x])
-                                    nc[ny * 24 + x] = cell.cov[y * 24 + x];
-                                if (cell.bits[y * m_stride + (x >> 3)] & (0x80 >> (x & 7)))
-                                    nb[ny * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
-                            }
-                        }
-                        memcpy(cell.bits, nb, sizeof(cell.bits));
-                        memcpy(cell.cov, nc, sizeof(cell.cov));
-                        dy = 0;
-                    }
-
-                    if (dy > 0)
-                    {
-                        for (int y = m_lines - 1; y >= dy; --y)
-                        {
-                            memcpy(cell.bits + y * m_stride, cell.bits + (y - dy) * m_stride, m_stride);
-                            memcpy(cell.cov + y * 24, cell.cov + (y - dy) * 24, 24);
-                        }
-                        memset(cell.bits, 0, (size_t)dy * m_stride);
-                        memset(cell.cov, 0, (size_t)dy * 24);
-                    }
-                    else if (dy < 0)
-                    {
-                        for (int y = 0; y < m_lines + dy; ++y)
-                        {
-                            memcpy(cell.bits + y * m_stride, cell.bits + (y - dy) * m_stride, m_stride);
-                            memcpy(cell.cov + y * 24, cell.cov + (y - dy) * 24, 24);
-                        }
-                        memset(cell.bits + (m_lines + dy) * m_stride, 0, (size_t)(-dy) * m_stride);
-                        memset(cell.cov + (m_lines + dy) * 24, 0, (size_t)(-dy) * 24);
-                    }
-                }
-            }
-
-            if (m_fit)
-                FitColumns(cell, advance, m_stride, m_lines, m_fitMode, m_baseline);
-
-            std::pair<std::map<unsigned int, GlyphCell>::iterator, bool> ins =
+            std::pair<std::map<unsigned long long, GlyphCell>::iterator, bool> ins =
                 m_cache.insert(std::make_pair(key, cell));
             const GlyphCell* result = &ins.first->second;
             LeaveCriticalSection(&m_cs);

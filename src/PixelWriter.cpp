@@ -121,11 +121,14 @@ namespace vt
         { 15,  7, 13,  5 }
     };
 
-    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt)
+    unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt,
+                         int x, int y)
     {
         if (coverage >= 255)
             return src;
         if (coverage <= 0)
+            return dst;
+        if (dst == src)
             return dst;
 
         const int rMask = (1 << fmt.redBits) - 1;
@@ -157,35 +160,22 @@ namespace vt
             const int g8 = g_linToSrgb[gl < 0 ? 0 : (gl > 4095 ? 4095 : gl)];
             const int b8 = g_linToSrgb[bl < 0 ? 0 : (bl > 4095 ? 4095 : bl)];
 
-            r = (r8 * rMask + 127) / 255;
-            g = (g8 * gMask + 127) / 255;
-            b = (b8 * bMask + 127) / 255;
+            r = r8; g = g8; b = b8;
         }
         else
         {
-            r = dr + ((sr - dr) * coverage) / 255;
-            g = dg + ((sg - dg) * coverage) / 255;
-            b = db + ((sb - db) * coverage) / 255;
+            r = (dr * (255 - coverage) + sr * coverage) / rMask;
+            g = (dg * (255 - coverage) + sg * coverage) / gMask;
+            b = (db * (255 - coverage) + sb * coverage) / bMask;
         }
 
-        if (g_dither)
-        {
-            // x/y of the destination pixel is not available here, so the dither
-            // uses the destination *value* plus the coverage as its coordinates:
-            // stable for a given pixel and enough to break up flat banding
-            const int bi = ((dst ^ (coverage << 1)) >> 1) & 3;
-            const int bj = ((dst >> 5) ^ coverage) & 3;
-            const int off = k_bayer[bi][bj] - 8;              // -8..+7
-            // half of one native step, expressed in the 8-bit domain:
-            // a 5-bit channel steps by 8, so half a step is 4 -> off/4 with
-            // off in [-8,7]; the old /32 scaling produced +/-2 levels instead
-            r += ((off * ((1 << (8 - fmt.redBits)) / 2)) + 8) / 16;
-            g += ((off * ((1 << (8 - fmt.greenBits)) / 2)) + 8) / 16;
-            b += ((off * ((1 << (8 - fmt.blueBits)) / 2)) + 8) / 16;
-            if (r < 0) r = 0; if (r > rMask) r = rMask;
-            if (g < 0) g = 0; if (g > gMask) g = gMask;
-            if (b < 0) b = 0; if (b > bMask) b = bMask;
-        }
+        // Dither the rounding threshold BEFORE RGB565 quantisation. A spatial
+        // Bayer pattern changes a channel by at most one output level and never
+        // invents light in a zero-valued channel.
+        const int threshold = g_dither ? (2 * k_bayer[y & 3][x & 3] + 1) : 16;
+        r = (r * rMask * 32 + threshold * 255) / (255 * 32);
+        g = (g * gMask * 32 + threshold * 255) / (255 * 32);
+        b = (b * bMask * 32 + threshold * 255) / (255 * 32);
 
         return (unsigned short)((r << fmt.redShift) | (g << fmt.greenShift) | (b << fmt.blueShift));
     }
@@ -239,10 +229,10 @@ namespace vt
                         }
                     int ring = dil - cov;
                     if (ring > 0)
-                        row[sx] = Blend(row[sx], g_outlineColor, ring, fmt);
+                        row[sx] = Blend(row[sx], g_outlineColor, ring, fmt, sx, sy);
                 }
 
-                row[sx] = Blend(row[sx], color, cov, fmt);
+                row[sx] = Blend(row[sx], color, cov, fmt, sx, sy);
                 ++written;
             }
         }
