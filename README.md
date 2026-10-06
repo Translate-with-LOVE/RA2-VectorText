@@ -59,6 +59,11 @@ F:\Mental Omega\VectorText\
     └─ font_preview.py    # game.fnt 与矢量字体的对照图 / 宽度量化对比
 ```
 
+## 3a. 游戏内崩溃排查
+
+第一次开 `Mode=draw` 崩过一次（画出第一个字形后 0xC0000005）。排查手册、已排除的假设、
+已加入的自证设施与两步二分流程见 [docs/crash-triage.md](docs/crash-triage.md)。
+
 ## 3b. FreeType 子模块（M1 用）
 
 ```bat
