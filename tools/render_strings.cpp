@@ -341,7 +341,11 @@ int main(int argc, char** argv)
                 if (ok)
                 {
                     ++nDrawn;
-                    x = newX;
+                    // DrawAA publishes its advance by writing it into the font
+                    // data, so re-reading the byte afterwards is the harness'
+                    // pen step (the old code assigned the unused -1 and drew the
+                    // whole row off-screen to the left)
+                    x = viaAA ? x + (GameAdvance(cp) > 0 ? GameAdvance(cp) : 6) : newX;
                 }
                 else
                 {
