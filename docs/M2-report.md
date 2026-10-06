@@ -139,3 +139,54 @@ A/B 对照:  例外命中 vs 不命中 → 21,562 个像素不同   ← 机制�
 
 彻底的解法是**同时接管 `GetTextDimension`**：自己按调用者选择度量来累加宽度并返回，
 这样"量"不再依赖共享状态。这是 M2.2 的收尾项。
+---
+
+## 9. 最终状态（M2 收口）
+
+### 已交付并验证
+
+| 能力 | 验证方式 | 结果 |
+|---|---|---|
+| 抗锯齿矢量文字接管 | 真机运行（`Mode=aa`） | 132,114 个字形，`failed=0 unknownGlyph=0` |
+| 2× 超采样光栅化 | 字形行列与 `game.fnt` 对照 | `A`/`a`/`文` 与原点阵**逐行逐列一致** |
+| 亚像素定位 | 同批字符串 `Subpixel=0/1` 逐像素比对 | 353 像素差异 → 相位生效 |
+| 度量三档 + 审计 | 310 次真实测量重放 | `scaled 1.05` 零溢出（1.031×）；`vector` 1.377× 仅影响 1 处 |
+| 固定 UI 框例外 | 谓词命中 vs 不命中 A/B | 21,562 像素差异 → 例外表生效 |
+| 崩溃根因 | 内存转储 → Syringe 钩子桩反汇编 | `popad` 丢弃 ESP 修改；改用自生成栈修复跳板 |
+| 四模式可回退 | `off`/`observe`/`swap`/`aa` 单键切换 | 离线胶水测试各模式全绿 |
+
+### 尚未完成（明确的后续项）
+
+1. **测量一致性**：接管 `BitFont::GetTextDimension`（0x433CF0），按调用者选择度量累加宽度。
+   现状：宽度字节是全局共享的，"画"与"量"通常一致，但同一字符在例外界面与普通界面交替
+   出现时，那个界面的换行判断可能短暂不一致。需要复刻引擎的换行/行高/上限语义。
+2. **字号/字重体系**：现在只有全局的 `FontSizeLatin/FontSizeCJK` + `FontWeight`；
+   按用途（正文/提示/标题）分级尚未做。
+3. **32 位合成画质层（M3）**：前提是 `Mode=draw` 在真机跑通（跳板式跳过已按 dump 证据修好，
+   但尚无真机确认）。跑通后可在自绘路径上做超采样、真彩 gamma、SDF 描边。
+
+### 复现当前状态的完整清单
+
+```ini
+[VectorText]
+Enabled=1
+Mode=aa
+Metrics=scaled
+MetricsExcept=0x00553199
+AdvanceScale=1.05
+Subpixel=1
+Supersample=2
+FontFile=C:\Windows\Fonts\NotoSerifSC-VF.ttf
+FontWeight=700
+StemDarkening=120
+Gamma=1.40
+FontSizeLatin=13
+FontSizeCJK=16
+BaselineRow=13
+FitToAdvance=1
+Probe=1
+```
+
+离线自检：`selftest.bat`、`hooktest_draw.bat --mode aa|swap|draw|observe`、
+`takeover_test.bat`、`glyph_test.bat`、`pixel_test.bat`、`render_strings.bat`、
+`tools/audit_metrics.py`、`tools/verify_dll.py`。
