@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 VectorText contributors
+# SPDX-License-Identifier: GPL-3.0-only
 # -*- coding: utf-8 -*-
 """
 analyze_log.py -- turn a VectorText.log into the data we actually need:

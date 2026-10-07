@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "x86-release",
+      "displayName": "MSVC x86 Release (static CRT)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/cmake",
+      "environment": { "VSLANG": "1033" },
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "BUILD_TESTING": "ON" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "x86-release", "configurePreset": "x86-release" },
+    { "name": "deploy", "configurePreset": "x86-release", "targets": ["deploy"] }
+  ],
+  "testPresets": [
+    {
+      "name": "offline",
+      "configurePreset": "x86-release",
+      "output": { "outputOnFailure": true },
+      "filter": { "exclude": { "label": "display" } },
+      "execution": { "noTestsAction": "error" }
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 // ===========================================================================
 //  VectorText -- DLL entry point and (optional) Syringe handshake
 //
@@ -8,6 +10,7 @@
 
 #include "SyringeABI.h"
 #include "Logger.h"
+#include "Presentation32.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -40,6 +43,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*reserved*/)
     case DLL_PROCESS_ATTACH:
         DisableThreadLibraryCalls(hModule);
         vt::Log::Prepare();     // lock only; no file I/O under the loader lock
+        vt::Presentation32::PrepareEarly();
         break;
 
     case DLL_PROCESS_DETACH:

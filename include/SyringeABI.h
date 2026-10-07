@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

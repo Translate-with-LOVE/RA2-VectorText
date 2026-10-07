@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 // ===========================================================================
 //  hooktest_draw.cpp -- the *hook glue* under test, in draw mode.
 //
@@ -14,7 +16,7 @@
 //  and, in the refusal cases, that it returns 0 with ESP untouched (the engine
 //  then runs its own code, i.e. a byte-for-byte fallback).
 //
-//  usage: hooktest_draw.exe [--mode draw|observe] [--fnt path]
+//  usage: hooktest_draw.exe [--mode off|observe|draw] [--fnt path]
 // ===========================================================================
 
 #include <windows.h>
@@ -112,7 +114,7 @@ static void WriteIni(const char* mode)
     fprintf(f, "[VectorText]\nEnabled=1\nMode=%s\nAntiAlias=1\n"
                "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
                "FontWeight=400\nFontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n"
-               "Metrics=scaled\nAdvanceScale=1.05\nMetricsExcept=0x00553199\n",
+               "Metrics=scaled\nAdvanceScale=1.05\n",
             mode);
     fclose(f);
 }
@@ -173,14 +175,6 @@ int main(int argc, char** argv)
     for (int i = 0; i < W * H; ++i) g_surf[i] = BG;
     InitObjects();
 
-    // snapshot the original glyph bytes *before* any hook runs, so case 5 can
-    // prove the swap really replaced them
-    static unsigned char g_origGlyph[64];
-    {
-        const unsigned short idx = g_map[0x4E2D];
-        if (idx) memcpy(g_origGlyph, (const void*)(g_bitmaps + (size_t)(idx - 1) * g_symbolSize), g_symbolSize);
-    }
-
     // ---- 1. a mapped character, mapped by game.fnt -------------------------
     printf("\n1) draw mode, character with a game.fnt glyph (U+4E2D)\n");
     {
@@ -192,12 +186,7 @@ int main(int argc, char** argv)
         const DWORD ret = DriveBlit(blit, 0x4E2D, 8, 4, -1, &call, &r, &espBefore);
         const int adv = GameAdvance(0x4E2D);
 
-        if (!strcmp(mode, "aa"))
-        {
-            CHECK(ret == 0 && r.esp == espBefore, "aa: no skip at all (returns 0, ESP untouched)");
-            CHECK(InkCount() > 20, "aa: our antialiased pixels reached the surface (%d)", InkCount());
-        }
-        else if (!strcmp(mode, "draw"))
+        if (!strcmp(mode, "draw"))
         {
             // Syringe's stub restores ESP with popad, which ignores the saved
             // ESP: the handler must not rely on R->ESP at all.  It returns a
@@ -213,7 +202,7 @@ int main(int argc, char** argv)
         }
         else
         {
-            CHECK(ret == 0, "observe mode: returns 0 (engine draws, pass-through)");
+            CHECK(ret == 0, "pass-through mode: returns 0 (engine draws, pass-through)");
             CHECK(r.esp == espBefore, "ESP untouched (0x%08X)", (unsigned)r.esp);
             CHECK(InkCount() == 0, "nothing written (%d)", InkCount());
         }
@@ -266,64 +255,26 @@ int main(int argc, char** argv)
         int greenPix = 0;
         for (int i = 0; i < W * H; ++i)
             if (g_surf[i] != BG && g_surf[i] != FG) ++greenPix;
-        if (!strcmp(mode, "draw") || !strcmp(mode, "aa"))
+        if (!strcmp(mode, "draw"))
             CHECK(greenPix > 0, "the argument colour reached the surface (%d px)", greenPix);
         else
-            CHECK(InkCount() == 0, "observe mode wrote nothing (%d)", InkCount());
+            CHECK(InkCount() == 0, "pass-through mode wrote nothing (%d)", InkCount());
     }
 
-    // ---- 5. swap mode: our cell must replace the engine's own glyph data ---
-    printf("\n5) swap mode: the engine's font data now holds our glyph\n");
+    // Bitmap data is never replaced or blanked by any supported mode.
+    printf("\n5) native bitmap data remains unchanged\n");
     {
         const unsigned int ch = 0x4E2D;
         const unsigned short idx = g_map[ch];
-        if (idx == 0)
-        {
-            printf("  [skip] game.fnt has no glyph for U+%04X\n", ch);
-        }
-        else
-        {
-            unsigned char* slot = (unsigned char*)(g_bitmaps + (size_t)(idx - 1) * g_symbolSize);
-            static unsigned char before[64];
-            memcpy(before, slot, g_symbolSize);
-
+        if (idx) {
+            const unsigned char* slot = g_bitmaps + (size_t)(idx - 1) * g_symbolSize;
+            unsigned char before[64];
+            memcpy(before, slot + 1, g_symbolSize - 1);
             BlitCall call;
             REGISTERS r;
-            DWORD espBefore = 0;
-            const DWORD ret = DriveBlit(blit, ch, 8, 4, -1, &call, &r, &espBefore);
-
-            if (!strcmp(mode, "swap"))
-            {
-                CHECK(ret == 0 && r.esp == espBefore, "no skip at all: returns 0, ESP untouched");
-                CHECK(memcmp(g_origGlyph, slot, g_symbolSize) != 0,
-                      "the font's glyph data differs from the original game.fnt bytes");
-                CHECK(slot[0] == before[0], "advance byte unchanged (%u)", (unsigned)slot[0]);
-
-                static unsigned char after[64];
-                memcpy(after, slot, g_symbolSize);
-                DriveBlit(blit, ch, 8, 4, -1, &call, &r, NULL);
-                CHECK(memcmp(after, slot, g_symbolSize) == 0, "second call is idempotent");
-
-                // the engine will read these bytes: they must be a valid 1bpp cell
-                int ink = 0;
-                for (int i = 1; i < g_symbolSize; ++i)
-                    for (int b = 0; b < 8; ++b)
-                        if (slot[i] & (0x80 >> b)) ++ink;
-                CHECK(ink > 10, "the swapped cell has ink (%d pixels)", ink);
-            }
-            else if (!strcmp(mode, "aa"))
-            {
-                int nonzero = 0;
-                for (int i = 1; i < g_symbolSize; ++i) if (slot[i]) ++nonzero;
-                CHECK(nonzero == 0, "aa: the engine bitmap is fully blanked (%d non-zero bytes)", nonzero);
-                CHECK(slot[0] == g_origGlyph[0], "aa: advance byte preserved (%u)", (unsigned)slot[0]);
-                CHECK(InkCount() > 20, "aa: our antialiased pixels are in the surface (%d)", InkCount());
-            }
-            else
-            {
-                CHECK(memcmp(before, slot, g_symbolSize) == 0,
-                      "mode=%s leaves the font data alone", mode);
-            }
+            DriveBlit(blit, ch, 8, 4, -1, &call, &r, NULL);
+            CHECK(memcmp(before, slot + 1, g_symbolSize - 1) == 0,
+                  "mode=%s leaves native glyph bitmap intact", mode);
         }
     }
 

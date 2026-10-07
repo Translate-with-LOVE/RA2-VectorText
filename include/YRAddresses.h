@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
 // ===========================================================================
@@ -34,6 +36,14 @@ namespace yra
     //           8B 3D D0 C4 89 00        mov edi,[0089C4D0]           (6) -> 10
     constexpr unsigned int Drawing_GetTextDimensions    = 0x004A59E0u;
     constexpr unsigned int Drawing_GetTextDimensionsSz  = 10;
+    // Final rectangle height write, followed by pop edi / pop esi.
+    constexpr unsigned int Drawing_TextDimensionsDone   = 0x004A5A40u;
+    constexpr unsigned int Drawing_TextDimensionsDoneSz = 5;
+    // Message row background: mov edx,[ecx] / push 0 / push eax (2+2+1).
+    // Stack +30h is its rectangle, EBP is the height written after pushes.
+    // Complete rectangle setup before Phobos' optional fill hook at 623A9F.
+    constexpr unsigned int Message_Background           = 0x00623A97u;
+    constexpr unsigned int Message_BackgroundSz         = 8;
 
     // BitFont::GetTextDimension  (__thiscall)
     //     ECX = BitFont* this

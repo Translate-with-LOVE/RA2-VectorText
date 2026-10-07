@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "Takeover.h"
 #include "GlyphSource.h"
+#include "PixelWriter.h"
 #include "Logger.h"
 #include "SyringeABI.h"
 #include <ft2build.h>
@@ -51,12 +54,14 @@ static unsigned int __stdcall ThreadProbe(void*)
 }
 
 #include "dimension_machine_check.h"
+#include "config_encoding_check.h"
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc>2 && !strcmp(argv[1],"--config-encoding")) return CheckConfigEncoding(argv[2]);
     CHECK(GetModuleHandleA("Phobos.dll") == NULL && GetModuleHandleA("Ares.dll") == NULL,
           "regression process starts without Phobos or Ares");
-    FILE* f = fopen("F:\\Mental Omega\\game.fnt", "rb");
+    FILE* f = fopen(VT_GAME_DIR "/game.fnt", "rb");
     if (!f) return 2;
     fseek(f, 0, SEEK_END); long len = ftell(f); rewind(f);
     fontData.resize(len); fread(fontData.data(), 1, len, f); fclose(f);
@@ -85,6 +90,29 @@ int main()
     CHECK(!memcmp(&info, &before, sizeof(info)) && !Lit(), "measurement preserves active line and writes no pixels");
     Draw(text, 20, 12);
     CHECK(Lit() > 0, "line draws on locked surface");
+    const wchar_t* legacyQuotes=L"中文\x0093中文\x0094 A\x0092V\x0085";
+    const wchar_t* unicodeQuotes=L"中文\x201C中文\x201D A\x2019V\x2026";
+    if (vt::Cfg::LegacyCodepage1252()) {
+        Clear();
+        CHECK(vt::Takeover::BeginLine(font,legacyQuotes,-1,20,12,20,0,0,Caller),"legacy punctuation row prepared using original engine characters");
+        int legacyMeasure=0,unicodeMeasure=0;
+        vt::Takeover::MeasureDynamicWidth(font,legacyQuotes,0,&legacyMeasure);
+        Draw(legacyQuotes,20,12);
+        const std::vector<unsigned short> legacyPixels(pixels,pixels+W*H);
+        Clear();
+        CHECK(vt::Takeover::BeginLine(font,unicodeQuotes,-1,20,12,20,0,0,Caller),"correct Unicode reference row prepared");
+        vt::Takeover::MeasureDynamicWidth(font,unicodeQuotes,0,&unicodeMeasure);
+        Draw(unicodeQuotes,20,12);
+        CHECK(legacyMeasure==unicodeMeasure && !memcmp(pixels,legacyPixels.data(),sizeof(pixels)),
+              "legacy punctuation matches Unicode layout and pixels while returning each original engine advance");
+        Clear();
+        CHECK(vt::Takeover::BeginLine(font,L"WESTWOOD\x0099",-1,20,12,20,0,0,Caller),"legacy trademark renders even when game.fnt lacks U+2122 slot");
+        Draw(L"WESTWOOD\x0099",20,12);
+        CHECK(Lit()>0,"legacy trademark row reaches surface");
+        Clear();
+        vt::Takeover::BeginLine(font,text,-1,20,12,20,0,0,Caller);
+        Draw(text,20,12);
+    }
     // Check the engine's Y against independent FreeType bitmap bearings.
     // A font may overhang the old 16-row cell; that is not a baseline shift.
     vt::GlyphSource verticalReference;
@@ -112,6 +140,97 @@ int main()
         if ((y < firstRow || y > lastRow) && pixels[y * W + x]) { CHECK(false, "engine Y retained with font's natural vertical bearings"); y = H; break; }
     CHECK(fontData == original, "font tables and bitmap data unchanged");
     CHECK(*(unsigned short*)(font + 36) == 0x07FF, "font colour restored/preserved");
+
+    // A fractional centre anchor must keep its measured position while its
+    // pixels obey Subpixel=0/1. Compare the complete glyph with an independent
+    // zero-phase / fractional-phase raster, rather than just counting pixels.
+    verticalReference.SetHinting(hint);
+    bool fractionalAnchor = false;
+    for (int boxWidth = 120; boxWidth < 124; ++boxWidth)
+    {
+        Clear();
+        const int oldX = 20 + (boxWidth - LegacyWidth(L"i")) / 2;
+        CHECK(vt::Takeover::BeginLine(font, L"i", -1, oldX, 12, 20, boxWidth, 1, Caller), "fractional centred glyph prepared");
+        vt::Takeover::GetLineInfo(&info);
+        if (!(info.originQ & 3)) continue;
+        fractionalAnchor = true;
+        Draw(L"i", oldX, 12);
+        std::vector<unsigned short> expected(W * H, 0);
+        const bool subpixel = vt::Cfg::ConfigBool("Subpixel", true);
+        const int rasterX = (info.originQ + (subpixel ? 0 : 2)) / 4;
+        const int phase = subpixel ? info.originQ % 4 : 0;
+        const vt::GlyphCell* glyph = verticalReference.Get('i', -1, phase);
+        vt::Target referenceTarget = { expected.data(), W, 0, 0, W - 1, H - 1 };
+        CHECK(glyph != NULL, "independent centred glyph exists");
+        if (glyph) vt::DrawCellAA(referenceTarget, *glyph, rasterX, 12, 16, 0x07FF, vt::RGB565);
+        CHECK(!memcmp(pixels, expected.data(), sizeof(pixels)), "fractional anchor raster honours configured pixel positioning");
+        vt::Takeover::GetLineInfo(&before);
+        CHECK(before.originQ == info.originQ && before.widthQ == info.widthQ, "pixel snap leaves natural layout and width unchanged");
+        break;
+    }
+    CHECK(fractionalAnchor, "centred regression exercises a fractional pixel origin");
+
+    const wchar_t* backgroundRows[] = { L"就绪", L"Ready", L"11154", L"中文:50%" };
+    for (const wchar_t* row : backgroundRows) for (int align = 0; align <= 2; ++align)
+    {
+        Clear();
+        const int anchor = 180, boxX = align == 1 ? 20 : align == 2 ? -140 : 180, boxWidth = 320;
+        const int oldX = anchor - (align == 1 ? LegacyWidth(row) / 2 : align == 2 ? LegacyWidth(row) : 0);
+        CHECK(vt::Takeover::BeginLine(font,row,-1,oldX,12,boxX,boxWidth,align,Caller),"background reference row prepared");
+        vt::Takeover::GetLineInfo(&before);
+        vt::Takeover::InkY ink = {};
+        CHECK(vt::Takeover::MeasureTextInkY(font,row,anchor,align,&ink),"background ink measured without drawing");
+        vt::Takeover::GetLineInfo(&info);
+        CHECK(!memcmp(&info,&before,sizeof(info)) && !Lit(),"ink measurement preserves active draw plan and pixels");
+        Draw(row,oldX,12);
+        int actualTop = H, actualBottom = -1;
+        int actualLeft = W, actualRight = -1;
+        for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) if (pixels[y * W + x])
+        { if (y < actualTop) actualTop = y; if (y + 1 > actualBottom) actualBottom = y + 1;
+          if (x < actualLeft) actualLeft = x; if (x + 1 > actualRight) actualRight = x + 1; }
+        CHECK(ink.top + 12 == actualTop && ink.bottom + 12 == actualBottom && ink.lines == 1,
+              "vertical background edges match complete actual raster at all alignments");
+        CHECK(ink.left==actualLeft && ink.right==actualRight,
+              "horizontal background edges match actual raster including side bearings at all alignments");
+    }
+
+    // Multiline extents must retain intermediate blank rows and native spacing.
+    *(int*)(font + 0x1C) = 20;
+    vt::Takeover::InkY one = {}, several = {}, crlf = {};
+    CHECK(vt::Takeover::MeasureTextInkY(font,L"就绪",20,0,&one) &&
+          vt::Takeover::MeasureTextInkY(font,L"就绪\n\n就绪",20,0,&several) &&
+          several.lines == 3 && several.top == one.top && several.bottom == one.bottom + 40,
+          "vertical ink span retains intentional internal blank line");
+    CHECK(vt::Takeover::MeasureTextInkY(font,L"就绪\r\n就绪",20,0,&crlf) &&
+          crlf.lines == 2 && crlf.bottom == one.bottom + 20,"CRLF advances exactly one native row");
+    CHECK(!vt::Takeover::MeasureTextInkY(font,L"\n就绪",20,0,&several) &&
+          !vt::Takeover::MeasureTextInkY(font,L"就绪\n",20,0,&several),"intentional outer blank rows preserve native box");
+    const wchar_t* tipRows[] = { L"军械库", L"$800 \u231A00:41 \u26A1-50 gyp" };
+    const wchar_t* tipText = L"军械库\n$800 \u231A00:41 \u26A1-50 gyp";
+    CHECK(vt::Takeover::MeasureTextInkY(font,tipText,20,0,&several),"mixed tooltip ink includes icons and descenders");
+    const int popupY = 10, textY = popupY + 2 - several.top;
+    Clear();
+    for (int row = 0; row < 2; ++row)
+    {
+        CHECK(vt::Takeover::BeginLine(font,tipRows[row],-1,20,textY+row*20,20,0,0,Caller),"full tooltip row prepared");
+        Draw(tipRows[row],20,textY+row*20);
+    }
+    const std::vector<unsigned short> fullTooltip(pixels,pixels+W*H);
+    Clear();
+    *(int*)(font+52) = popupY;
+    *(int*)(font+60) = popupY + several.bottom - several.top + 4 - 1;
+    for (int row = 0; row < 2; ++row)
+    {
+        CHECK(vt::Takeover::BeginLine(font,tipRows[row],-1,20,textY+row*20,20,0,0,Caller),"compact tooltip row prepared");
+        Draw(tipRows[row],20,textY+row*20);
+    }
+    CHECK(!memcmp(pixels,fullTooltip.data(),sizeof(pixels)),"compact vertical clip preserves every pixel, including first top and final descenders/icons");
+    int firstTooltipInk = H, lastTooltipInk = -1;
+    for (int y=0;y<H;++y) for(int x=0;x<W;++x) if(pixels[y*W+x])
+    { if(y<firstTooltipInk)firstTooltipInk=y; if(y>lastTooltipInk)lastTooltipInk=y; }
+    CHECK(firstTooltipInk==popupY+2 && lastTooltipInk==*(int*)(font+60)-2,"compact tooltip retains 2px above and below actual ink");
+    *(int*)(font+52) = 0; *(int*)(font+60) = H-1;
+    *(int*)(font + 0x1C) = 0;
 
     const wchar_t* objectiveRows[] = { L"任务目标一： 保护天气控制机", L"任务目标二： 消灭敌军部队" };
     int objectiveWidths[2] = {};
@@ -291,6 +410,7 @@ int main()
         CHECK(boxHook != NULL, "viewport hook exported");
         Hook dimensionsDone = (Hook)GetProcAddress(dll, "VT_Hook_BitFont_DimensionDone");
         dimension_machine::Check(dll, font);
+        dimension_machine::CheckBackground(dll, font);
         Hook dimensionsEntry = (Hook)GetProcAddress(dll, "VT_Hook_BitFont_GetTextDimension");
         CHECK(dimensionsDone != NULL, "dynamic width epilogue hook exported");
         if (dimensionsDone && dimensionsEntry)
@@ -355,8 +475,9 @@ int main()
             const unsigned char expected[] = { 0x8B,0x14,0x24,0x83,0xC4,0x14,0x52,0xC3 };
             CHECK(trampoline && !memcmp((void*)trampoline, expected, sizeof(expected)), "ret 10h trampoline machine code retained");
             CHECK(unlock(&r) == 0, "unlock adapter passes through");
-            // After unlock the old per-glyph branch returns the raw cell width.
-            r.eax = 0; CHECK(blit(&r) != 0 && r.eax == (DWORD)(20 + Advance('A') - 1), "unlock removes line state from DLL");
+            // Per-glyph fallback must agree with native Blit's width + tracking,
+            // just as the planned row does. The old assertion omitted +2C.
+            r.eax = 0; CHECK(blit(&r) != 0 && r.eax == (DWORD)(20 + Advance('A')), "per-glyph fallback after unlock preserves native tracking");
         }
         Hook core = (Hook)GetProcAddress(dll, entries[0]);
         if (blit && unlock && core)

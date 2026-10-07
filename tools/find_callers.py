@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 VectorText contributors
+# SPDX-License-Identifier: GPL-3.0-only
 # -*- coding: utf-8 -*-
 """
 find_callers.py -- static call-site scan for gamemd.exe.
@@ -17,8 +19,9 @@ import argparse
 import os
 import struct
 import sys
+from pathlib import Path
 
-GAME_DEFAULT = r'F:\Mental Omega\gamemd.exe'
+GAME_DEFAULT = str(Path(__file__).resolve().parents[2] / 'gamemd.exe')
 
 # addresses that matter for the text pipeline (see docs/rendering.md)
 KNOWN = {

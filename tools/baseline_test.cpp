@@ -1,5 +1,8 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "GlyphSource.h"
 #include "PixelWriter.h"
+#include "PixelPlane.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
@@ -75,9 +78,7 @@ int main()
     for (const wchar_t* p = sample; *p; ++p) {
         const vt::GlyphCell* natural = source.Get(*p, -1);
         const vt::GlyphCell* explicitWidth = source.Get(*p, 24);
-        const vt::GlyphCell* fixedSlot = source.Get(*p, 24, 0, 1024, true);
-        if (!natural || !explicitWidth || !fixedSlot) { ++failures; continue; }
-        if (explicitWidth == fixedSlot || fixedSlot->inkY || fixedSlot->inkRows) ++failures;
+        if (!natural || !explicitWidth) { ++failures; continue; }
         if (natural->inkY != explicitWidth->inkY || natural->inkRows != explicitWidth->inkRows)
             ++failures;
         for (int y = 0; y < 48; ++y) {
@@ -96,6 +97,41 @@ int main()
             }
         }
     }
+    // Separate FreeType faces at output resolution verify that the final 2x
+    // layer includes every raster row, including ink above the logical top.
+    vt::GlyphSource reference2;
+    reference2.SetAntiAlias(true);
+    if(!reference2.Init("C:\\Windows\\Fonts\\NotoSansSC-VF.ttf",26,450,3,32,26)) return 2;
+    reference2.SetSizes(26,32);
+    if(!reference2.SetLatinFont("C:\\Windows\\Fonts\\arial.ttf")) return 2;
+    source.SetHighResolution(true);
+    int highChecks=0;
+    for(const wchar_t* p=sample;*p;++p) for(int hint:{0,1,2})
+    for(int phase:{0,1,2,3}) for(int scale:{1024,950}) {
+        source.SetHinting(hint);
+        const auto* cell=source.Get(*p,-1,phase,scale);
+        if(!cell || !cell->raster2) { ++failures;continue; }
+        FT_Face face=(FT_Face)reference2.FaceHandleFor(*p);
+        FT_Matrix transform{scale*64,0,0,scale*64};FT_Vector offset{phase*32,0};
+        FT_Set_Transform(face,&transform,&offset);
+        FT_Int32 flags=(hint==1 ? FT_LOAD_TARGET_NORMAL : hint==2 ? FT_LOAD_NO_HINTING : FT_LOAD_TARGET_LIGHT)|FT_LOAD_NO_BITMAP|FT_LOAD_RENDER;
+        if(FT_Load_Char(face,*p,flags)) return 2;
+        const auto g=face->glyph;
+        vt::PlaneOptions options;options.highResolution=true;
+        vt::PixelPlane plane(64,48,options);
+        plane.Paint(*cell,8,8,16,0xFFFF,{0,0,64,48});
+        unsigned int actual[128*96]{},expected[128*96]{};
+        plane.Overlay2Rect(actual,128,{0,0,64,48});
+        for(unsigned int r=0;r<g->bitmap.rows;++r) for(unsigned int c=0;c<g->bitmap.width;++c) {
+            int x=16+g->bitmap_left+c,y=42-g->bitmap_top+r;
+            if(x>=0 && x<128 && y>=0 && y<96) expected[y*128+x]=g->bitmap.buffer[r*g->bitmap.pitch+c];
+        }
+        bool mismatch=false;
+        for(int i=0;i<128*96;++i) if((actual[i]>>24)!=expected[i]) { mismatch=true;break; }
+        if(mismatch) { if(failures<10) printf("2x mismatch U+%04X hint=%d phase=%d scale=%d\n",*p,hint,phase,scale);++failures; }
+        ++highChecks;
+    }
+    printf("2x independent font/placement comparisons: %d\n",highChecks);
     printf("%s: %d fixed-baseline bitmap comparisons failed\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

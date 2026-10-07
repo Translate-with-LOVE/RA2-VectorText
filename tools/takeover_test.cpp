@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 // ===========================================================================
 //  takeover_test.cpp -- offline verification of the M1 takeover path.
 //
@@ -26,6 +28,7 @@
 #include <string.h>
 #include <windows.h>
 #include <wchar.h>
+#include <initializer_list>
 
 static int g_fail = 0;
 #define CHECK(cond, ...) do { if (!(cond)) { ++g_fail; printf("  [FAIL] "); printf(__VA_ARGS__); printf("\n"); } \
@@ -305,8 +308,47 @@ int main(int argc, char** argv)
         CHECK(missing != 0 && !ok, "U+%04X refused (engine draws its placeholder)", missing);
     }
 
+    printf("\n8) tracking agrees with native drawn and clipped return paths\n");
+    {
+        InitBitFont(&in, g_surf, W, FG, 0, 0, W - 1, H - 1);
+        bool matched = true;
+        for (int extra : {0, 1, 3, -1})
+        {
+            *(int*)(g_bitFont + 0x2C) = extra;
+            int pen = -1;
+            matched = matched && vt::Takeover::TryBlit(g_bitFont, 'A', 4, 4, -1, &pen) &&
+                pen == 4 + AdvOf('A') + extra;
+            // A valid clip but an offscreen glyph must return the same advance.
+            matched = matched && vt::Takeover::TryBlit(g_bitFont, 'A', -100, 4, -1, &pen) &&
+                pen == -100 + AdvOf('A') + extra;
+        }
+        CHECK(matched, "native X + width + tracking preserved, including clipped glyphs");
+    }
+    printf("\n9) probe rectangle is valid; actual empty clips are refused without mutation\n");
+    {
+        unsigned short* large = (unsigned short*)calloc(1920 * 580, sizeof(unsigned short));
+        InitBitFont(&in, large, 1920, FG, 1100, 550, 1300, 570);
+        int pen = -1;
+        CHECK(large && vt::Takeover::TryBlit(g_bitFont, 0x7F8E, 1270, 550, -1, &pen),
+              "logged 1100,550,1300,570 rectangle accepted");
+        free(large);
+        InitBitFont(&in, g_surf, W, FG, 0, 0, -1, -1);
+        memset(g_surf, 0, sizeof(g_surf));
+        const unsigned char widthBefore = g_bitmaps[(g_map['A'] - 1) * g_symbolSize];
+        bool refused = true;
+        for (int i = 0; i < 10000; ++i)
+            refused = refused && !vt::Takeover::TryBlit(g_bitFont, 'A', 4, 4, -1, &pen);
+        CHECK(refused && !CountInk() &&
+              g_bitmaps[(g_map['A'] - 1) * g_symbolSize] == widthBefore,
+              "empty-clip refusals leave pixels and glyph widths untouched");
+        InitBitFont(&in, g_surf, W, FG, W + 4, 0, W + 20, 19);
+        CHECK(!vt::Takeover::TryBlit(g_bitFont, 'A', W + 4, 4, -1, &pen),
+              "valid raw rectangle beyond surface pitch is safely refused");
+        InitBitFont(&in, g_surf, W, FG, 0, 0, W - 1, H - 1);
+    }
+
     // ---- hot path throughput ----------------------------------------------
-    printf("\n8) hot path throughput (a session draws ~775k glyphs)\n");
+    printf("\n10) hot path throughput (a session draws ~775k glyphs)\n");
     {
         LARGE_INTEGER freq, t0, t1;
         QueryPerformanceFrequency(&freq);

@@ -1,7 +1,9 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <windows.h>
 
-// M0 logger: counts every intercepted text call and records each *distinct*
+// Logger: counts every intercepted text call and records each *distinct*
 // string once, so the log answers "which UI text goes through which hook".
 // Observation only -- nothing in the drawing pipeline is modified.
 
@@ -34,10 +36,10 @@ namespace vt
         void Note(const char* fmt, ...);   // free-form line
     }
 
-    // M1 configuration (VectorText.ini, read lazily in-process like the logger)
+    // Configuration (VectorText.ini, read lazily in-process like the logger)
     namespace Cfg
     {
-        enum Mode { Mode_Off = 0, Mode_Observe = 1, Mode_Draw = 2, Mode_Swap = 3, Mode_AA = 4 };
+        enum Mode { Mode_Off = 0, Mode_Observe = 1, Mode_Draw = 2 };
 
         void Load();                       // idempotent; called by the first accessor
         int  Mode();
@@ -48,7 +50,6 @@ namespace vt
         int  BaselineRow();
         bool FitToAdvance();
         bool AntiAlias();
-        bool FallbackOnError();
         bool Probe();                      // log the runtime BitFont layout once
         int  StemDarkening();              // FreeType stem darkening (0 = off)
         double Gamma();                    // coverage gamma for the AA path
@@ -60,10 +61,9 @@ namespace vt
         int  Outline();                    // SDF-style outline width in pixels
         unsigned short OutlineColor();     // the ring colour (16-bit surface word)
 
-        // MetricsExcept: code addresses whose function must keep the engine's own
-        // metrics even when Metrics=scaled/vector (fixed-size UI boxes)
-        int  MetricsExceptCount();
-        unsigned int MetricsExceptAt(int i);
+        bool LegacyCodepage1252();          // render C1 slots using legacy CP1252 glyphs
+        bool HiDPI();                      // allow automatic output-resolution text
+        bool ConfigBool(const char* key, bool def);
         int  ConfigInt(const char* key, int def);
         void ConfigStr(const char* key, const char* def, char* out, int cch);
     }

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 VectorText contributors
+# SPDX-License-Identifier: GPL-3.0-only
 # -*- coding: utf-8 -*-
 """
 verify_dll.py -- sanity-check a Syringe hook DLL built by this project.
@@ -12,6 +14,7 @@ Checks, without running the game:
     exported function (this is how Syringe binds a hook to its handler)
   * every name pointer has a base relocation (needed for ASLR)
   * neither ordinary nor delay imports require Phobos/Ares
+  * hook spans do not overlap those of an installed Phobos.dll
 
 usage:  python verify_dll.py [path\\to\\VectorText.dll]
 """
@@ -25,6 +28,67 @@ DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '
 def load(path):
     with open(path, 'rb') as f:
         return f.read()
+
+
+def check_native_raster(path):
+    game = os.path.join(os.path.dirname(path), 'gamemd.exe')
+    if not os.path.isfile(game):
+        return True
+    d = load(game)
+    nt, = struct.unpack_from('<I', d, 0x3C)
+    count, = struct.unpack_from('<H', d, nt + 6)
+    optsize, = struct.unpack_from('<H', d, nt + 20)
+    timestamp, = struct.unpack_from('<I', d, nt + 8)
+    base, = struct.unpack_from('<I', d, nt + 52)
+    sections = [struct.unpack_from('<IIII', d, nt + 24 + optsize + i * 40 + 8)
+                for i in range(count)]
+    def read(va, size):
+        for vsize, rva, rawsize, rawptr in sections:
+            if rva <= va - base and va - base + size <= rva + rawsize:
+                off = rawptr + va - base - rva
+                return d[off:off + size]
+        return b''
+    prefix = bytes.fromhex('81 EC B4 00 00 00 53 56 8B F1 57')
+    copy_prefix = bytes.fromhex('8B 44 24 1C 83 EC 20 53 56 8B F1')
+    ok = base == 0x400000 and timestamp == 0x3BDF544E and (
+        read(0x4BB620, len(prefix)) == prefix and
+        read(0x7E85E4, 4) == struct.pack('<I', 0x4BB620) and
+        read(0x7E8658, 4) == struct.pack('<I', 0x4C1AB0) and
+        read(0x437350, len(copy_prefix)) == copy_prefix and
+        read(0x623A97, 8) == bytes.fromhex('89 54 24 30 8D 44 24 30'))
+    print('\nnative raster: FillRectEx 0x4BB620 and CPU copy 0x437350, vtable/prefix %s'
+          % ('OK' if ok else 'DIFFER -- Present32 will fall back'))
+    print('native message background: 0x623A97 setup before Phobos fill %s' %
+          ('OK' if read(0x623A97, 8) == bytes.fromhex('89 54 24 30 8D 44 24 30') else 'DIFFER'))
+    return ok
+
+
+def check_phobos_overlap(path, records):
+    """Check hook spans against the installed DLL without loading/executing it."""
+    phobos = os.path.join(os.path.dirname(path), 'Phobos.dll')
+    if not os.path.isfile(phobos):
+        return True
+    d = load(phobos)
+    nt, = struct.unpack_from('<I', d, 0x3C)
+    count, = struct.unpack_from('<H', d, nt + 6)
+    optsize, = struct.unpack_from('<H', d, nt + 20)
+    ok = True
+    for i in range(count):
+        at = nt + 24 + optsize + i * 40
+        if not d[at:at + 8].startswith(b'.syhks'):
+            continue
+        rawsize, rawptr = struct.unpack_from('<II', d, at + 16)
+        for off in range(rawptr, rawptr + rawsize, 16):
+            addr, size = struct.unpack_from('<II', d, off)
+            if not addr or not size:
+                continue
+            for ours, length, name in records:
+                if ours < addr + size and addr < ours + length:
+                    print('Phobos hook overlap: %s 0x%08X/%d with 0x%08X/%d' %
+                          (name, ours, length, addr, size))
+                    ok = False
+    print('installed Phobos hook spans: %s' % ('no overlap' if ok else 'CONFLICT'))
+    return ok
 
 
 def main():
@@ -136,6 +200,7 @@ def main():
 
     print('\n.syhks00 records:')
     ok = independent
+    records = []
     for name, va, vsize, rawptr, rawsize in hooks:
         count = 0
         for off in range(rawptr, rawptr + rawsize, 16):
@@ -145,6 +210,7 @@ def main():
                 continue
             count += 1
             s = read_cstr(nameptr)
+            records.append((addr, size, s))
             exported = s in exports if s else False
             # the name pointer field itself must be relocated, otherwise the
             # record breaks as soon as the DLL is loaded at another base
@@ -158,6 +224,8 @@ def main():
                   % (addr, size, nameptr, repr(s), exported, reloc, 'BAD' if bad else 'ok'))
         print('   (%d records in %s)' % (count, name))
 
+    ok = check_native_raster(path) and ok
+    ok = check_phobos_overlap(path, records) and ok
     print('\nresult    : %s' % ('OK -- ready for Syringe' if ok else 'PROBLEMS FOUND'))
     return 0 if ok else 1
 

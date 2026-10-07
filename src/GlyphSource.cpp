@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "GlyphSource.h"
 
 #include <ft2build.h>
@@ -12,9 +14,9 @@
 namespace vt
 {
     GlyphSource::GlyphSource()
-        : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
+        : m_lib(NULL), m_faceA(NULL), m_faceB(NULL),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_hinting(0), m_fitMode(1), m_darkErr{0,0,0}, m_classAlign(true),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_hinting(0), m_darkErr{0,0,0},
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         m_latinPath[0] = 0;
@@ -39,6 +41,19 @@ namespace vt
             FT_Done_Face((FT_Face)*face);
             *face = NULL;
         }
+    }
+
+    void GlyphSource::ClearCache()
+    {
+        m_cache.clear(); m_highCache.clear();
+        CloseFace(&m_highA); CloseFace(&m_highB);
+    }
+
+    void GlyphSource::SetHighResolution(bool on)
+    {
+        EnterCriticalSection(&m_cs);
+        if(m_highResolution!=on) { ClearCache(); m_highResolution=on; }
+        LeaveCriticalSection(&m_cs);
     }
 
     void* GlyphSource::OpenFace(int pixelSize, const char* path)
@@ -91,7 +106,6 @@ namespace vt
         m_stride   = strideBytes;
         m_lines    = lines;
         m_baseline = baselineRow;
-        m_size     = pixelSize;
         m_sizeLatin = pixelSize;
         m_sizeCJK   = pixelSize;
         m_path     = ttfPath;
@@ -124,7 +138,7 @@ namespace vt
         if (m_csInit)
         {
             EnterCriticalSection(&m_cs);
-            m_cache.clear();
+            ClearCache();
             LeaveCriticalSection(&m_cs);
         }
         return true;
@@ -132,6 +146,8 @@ namespace vt
 
     void GlyphSource::Shutdown()
     {
+        CloseFace(&m_highB);
+        CloseFace(&m_highA);
         CloseFace(&m_faceB);
         CloseFace(&m_faceA);
         if (m_lib)
@@ -142,7 +158,7 @@ namespace vt
         if (m_csInit)
         {
             EnterCriticalSection(&m_cs);
-            m_cache.clear();
+            ClearCache();
             LeaveCriticalSection(&m_cs);
         }
     }
@@ -164,7 +180,7 @@ namespace vt
         if (m_csInit)
         {
             EnterCriticalSection(&m_cs);
-            m_cache.clear();
+            ClearCache();
             LeaveCriticalSection(&m_cs);
         }
     }
@@ -175,7 +191,7 @@ namespace vt
         {
             EnterCriticalSection(&m_cs);
             m_aa = on;
-            m_cache.clear();                 // coverage is baked into the cell
+            ClearCache();                 // coverage is baked into the cell
             LeaveCriticalSection(&m_cs);
         }
         else
@@ -191,7 +207,7 @@ namespace vt
         if (mode != m_hinting)
         {
             m_hinting = mode;
-            m_cache.clear();
+            ClearCache();
         }
         LeaveCriticalSection(&m_cs);
     }
@@ -217,7 +233,7 @@ namespace vt
         if (m_csInit)
         {
             EnterCriticalSection(&m_cs);
-            m_cache.clear();
+            ClearCache();
             LeaveCriticalSection(&m_cs);
         }
     }
@@ -240,9 +256,29 @@ namespace vt
         CloseFace(&m_faceA);
         m_faceA = latin;
         strncpy_s(m_latinPath, path, _TRUNCATE);
-        m_cache.clear();
+        ClearCache();
         LeaveCriticalSection(&m_cs);
         return true;
+    }
+
+    void GlyphSource::SetLegacyCodepage1252(bool on)
+    {
+        EnterCriticalSection(&m_cs);
+        if (m_legacy1252 != on) { m_legacy1252 = on; ClearCache(); }
+        LeaveCriticalSection(&m_cs);
+    }
+
+    unsigned int GlyphSource::RenderCodepoint(unsigned int cp) const
+    {
+        // Undefined CP1252 positions retain their original values. Only this
+        // bounded C1 range is reinterpreted; Unicode and ASCII stay unchanged.
+        static const unsigned short unicode[32] = {
+            0x20AC,0x0081,0x201A,0x0192,0x201E,0x2026,0x2020,0x2021,
+            0x02C6,0x2030,0x0160,0x2039,0x0152,0x008D,0x017D,0x008F,
+            0x0090,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,
+            0x02DC,0x2122,0x0161,0x203A,0x0153,0x009D,0x017E,0x0178
+        };
+        return m_legacy1252 && cp >= 0x80 && cp <= 0x9F ? unicode[cp-0x80] : cp;
     }
 
     bool GlyphSource::UsesCJKFace(unsigned int cp) const
@@ -253,8 +289,9 @@ namespace vt
                (cp >= 0x2018 && cp <= 0x201F) || cp == 0x2025 || cp == 0x2026;
     }
 
-    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024, bool engineSlot)
+    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024)
     {
+        codepoint = RenderCodepoint(codepoint);
         if (!m_faceA)
             return NULL;
         if (scale1024 < 1 || scale1024 > 1024) return NULL;
@@ -274,8 +311,7 @@ namespace vt
         const unsigned long long key = (unsigned long long)codepoint
             | ((unsigned long long)advKey << 32)
             | ((unsigned long long)(phase + 3) << 40)
-            | ((unsigned long long)scale1024 << 44)
-            | ((unsigned long long)engineSlot << 55);
+            | ((unsigned long long)scale1024 << 44);
 
         EnterCriticalSection(&m_cs);
         std::map<unsigned long long, GlyphCell>::iterator it = m_cache.find(key);
@@ -303,7 +339,7 @@ namespace vt
             // bounded cache: a pathological stream of distinct codepoints must
             // not grow without limit (131k keys x ~900 B would be ~118 MB)
             if (m_cache.size() >= 16384)
-                m_cache.clear();
+                ClearCache();
 
             FT_Face face = (FT_Face)FaceHandleFor(codepoint);
             if (!FT_Get_Char_Index(face, codepoint))
@@ -357,7 +393,6 @@ namespace vt
                 FT_Outline_Get_CBox(&g->outline, &box);
                 const double unit = 64.0 * ss;
                 const double inkW = (box.xMax - box.xMin) / unit;
-                const double inkH = (box.yMax - box.yMin) / unit;
                 const bool smallMark = codepoint == '.' || codepoint == ',' ||
                     codepoint == ':' || codepoint == ';' || codepoint == '!' || codepoint == '?' ||
                     codepoint == 0x3001 || codepoint == 0x3002 || codepoint == 0xFF0C ||
@@ -381,8 +416,6 @@ namespace vt
                 double scale = 1.0;
                 if (fitCell && inkW > available)
                     scale = available / inkW;
-                if (engineSlot && inkH > m_lines && scale > m_lines / inkH)
-                    scale = m_lines / inkH;
                 mat.xx = mat.yy = (FT_Fixed)(scale * scale1024 * 64.0 + 0.5);
                 // The CBox already includes the initial phase. Reposition
                 // bearings that overflow the cell without changing the shape.
@@ -411,15 +444,6 @@ namespace vt
                 // or below the old 16-row cell must retain its actual bearing;
                 // fitting each ink box vertically made Chinese letters bounce.
                 delta.y = 0;
-                if (engineSlot)
-                {
-                    // Fixed engine glyph slots (swap) cannot carry inkY.
-                    const double top = m_baseline - box.yMax / unit * scale;
-                    const double bottom = m_baseline - box.yMin / unit * scale;
-                    double shiftY = top < 0.0 ? -top : 0.0;
-                    if (bottom + shiftY > m_lines) shiftY = m_lines - bottom;
-                    delta.y = (FT_Pos)(-shiftY * unit);
-                }
                 FT_Set_Transform(face, &mat, &delta);
             }
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags | FT_LOAD_RENDER))
@@ -433,20 +457,17 @@ namespace vt
             int rows = m_lines;
             if (gameAdvance <= 0)
                 cell.inkX = (int)floor((double)g->bitmap_left / ss);
-            if (!engineSlot)
+            if (g->bitmap.rows)
             {
-                if (g->bitmap.rows)
+                const int firstY = m_baseline * ss - g->bitmap_top;
+                cell.inkY = (int)floor((double)firstY / ss);
+                rows = (firstY + (int)g->bitmap.rows - cell.inkY * ss + ss - 1) / ss;
+                if (rows > 32)
                 {
-                    const int firstY = m_baseline * ss - g->bitmap_top;
-                    cell.inkY = (int)floor((double)firstY / ss);
-                    rows = (firstY + (int)g->bitmap.rows - cell.inkY * ss + ss - 1) / ss;
-                    if (rows > 32)
-                    {
-                        LeaveCriticalSection(&m_cs);
-                        return NULL;
-                    }
-                    cell.inkRows = rows;
+                    LeaveCriticalSection(&m_cs);
+                    return NULL;
                 }
+                cell.inkRows = rows;
             }
             if (gameAdvance <= 0 && (int)g->bitmap.width + g->bitmap_left - cell.inkX * ss > 24 * ss)
             {
@@ -485,6 +506,39 @@ namespace vt
                         cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
                 }
 
+            // Retain a separate 2x raster, with hinting on the output grid.
+            // Logical advances/bearings above remain exactly the 1x layout.
+            if(m_highResolution)
+            {
+                const bool cjk=UsesCJKFace(codepoint) && m_faceB;
+                void** high=cjk ? &m_highB : &m_highA;
+                if(!*high) *high=OpenFace((cjk ? m_sizeCJK : m_sizeLatin)*2,
+                    cjk ? NULL : (m_latinPath[0] ? m_latinPath : NULL));
+                FT_Face hf=(FT_Face)*high;
+                FT_Vector hd={delta.x*2/m_ss,delta.y*2/m_ss};
+                if(hf) FT_Set_Transform(hf,&mat,&hd);
+                if(hf && !FT_Load_Char(hf,(FT_ULong)codepoint,loadFlags|FT_LOAD_RENDER))
+                {
+                    const auto& bitmap=hf->glyph->bitmap;
+                    if(bitmap.width<=128 && bitmap.rows<=128)
+                    {
+                        GlyphRaster2 raster;
+                        raster.left=hf->glyph->bitmap_left;
+                        raster.top=m_baseline*2-hf->glyph->bitmap_top;
+                        raster.width=(int)bitmap.width; raster.rows=(int)bitmap.rows;
+                        raster.coverage.resize((size_t)raster.width*raster.rows);
+                        for(int r=0;r<raster.rows;++r) for(int c=0;c<raster.width;++c)
+                        {
+                            const auto* src=bitmap.buffer+r*bitmap.pitch;
+                            int cov=bitmap.pixel_mode==FT_PIXEL_MODE_MONO ?
+                                ((src[c/8]&(0x80>>(c&7))) ? 255:0) : src[c];
+                            if(m_fit && gameAdvance>0 && (raster.left+c<0 || raster.left+c>=gameAdvance*2)) cov=0;
+                            raster.coverage[(size_t)r*raster.width+c]=(unsigned char)cov;
+                        }
+                        cell.raster2=&m_highCache.emplace(key,std::move(raster)).first->second;
+                    }
+                }
+            }
             std::pair<std::map<unsigned long long, GlyphCell>::iterator, bool> ins =
                 m_cache.insert(std::make_pair(key, cell));
             const GlyphCell* result = &ins.first->second;
@@ -495,6 +549,7 @@ namespace vt
 
     int GlyphSource::KerningQuarter(unsigned int left, unsigned int right)
     {
+        left = RenderCodepoint(left); right = RenderCodepoint(right);
         if (!left || !right || !m_faceA) return 0;
         EnterCriticalSection(&m_cs);
         FT_Face face = (FT_Face)FaceHandleFor(left);

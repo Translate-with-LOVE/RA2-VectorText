@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "Logger.h"
 #include "Takeover.h"
 #include "../include/YRAddresses.h"
@@ -9,6 +11,7 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <ctype.h>
 
 namespace vt
 {
@@ -39,7 +42,6 @@ namespace vt
         int   g_cfgBaseline  = 13;
         bool  g_cfgFit       = true;
         bool  g_cfgAA        = true;
-        bool  g_cfgFallback  = true;
         bool  g_cfgProbe     = true;
         int   g_cfgDarkening = 0;
         double g_cfgGamma    = 1.0;
@@ -49,9 +51,9 @@ namespace vt
         bool  g_cfgDither    = true;
         int   g_cfgOutline   = 0;
         unsigned int g_cfgOutlineColor = 0x0000;
-        unsigned int g_cfgExcept[8] = { 0 };
-        int   g_cfgExceptN   = 0;
         double g_cfgAdvScale  = 1.0;
+        bool g_cfgLegacy1252 = true;
+        bool g_cfgHiDPI = true;
 
         struct Entry
         {
@@ -156,14 +158,30 @@ namespace vt
             strncpy_s(g_dir, path, _TRUNCATE);
         }
 
+        bool ReadBool(const char* ini, const char* key, bool def)
+        {
+            char value[64] = {};
+            GetPrivateProfileStringA("VectorText", key, "", value, sizeof(value), ini);
+            char* first = value;
+            while (isspace((unsigned char)*first)) ++first;
+            char* end = first + strlen(first);
+            while (end > first && isspace((unsigned char)end[-1])) --end;
+            *end = 0;
+            if (!_stricmp(first,"true") || !_stricmp(first,"yes") || !_stricmp(first,"on")) return true;
+            if (!_stricmp(first,"false") || !_stricmp(first,"no") || !_stricmp(first,"off")) return false;
+            char* numberEnd = NULL;
+            const long number = strtol(first,&numberEnd,0);
+            return numberEnd != first && !*numberEnd ? number != 0 : def;
+        }
+
         void ReadConfig()
         {
             char ini[MAX_PATH];
             _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
 
-            g_enabled    = GetPrivateProfileIntA("VectorText", "Enabled", 1, ini) != 0;
-            g_detailed   = GetPrivateProfileIntA("VectorText", "Detailed", 1, ini) != 0;
-            g_blitDetail = GetPrivateProfileIntA("VectorText", "LogBitFontBlitDetails", 0, ini) != 0;
+            g_enabled    = ReadBool(ini, "Enabled", true);
+            g_detailed   = ReadBool(ini, "Detailed", true);
+            g_blitDetail = ReadBool(ini, "LogBitFontBlitDetails", false);
             g_maxUnique  = GetPrivateProfileIntA("VectorText", "MaxUniqueStrings", 4000, ini);
             g_flushMs    = (DWORD)GetPrivateProfileIntA("VectorText", "FlushIntervalMs", 2000, ini);
             GetPrivateProfileStringA("VectorText", "LogFileName", "VectorText.log", g_logName, MAX_PATH, ini);
@@ -178,8 +196,6 @@ namespace vt
             GetPrivateProfileStringA("VectorText", "Mode", "observe", mode, sizeof(mode), ini);
             if      (!_stricmp(mode, "off"))     g_cfgMode = Cfg::Mode_Off;
             else if (!_stricmp(mode, "draw"))    g_cfgMode = Cfg::Mode_Draw;
-            else if (!_stricmp(mode, "swap"))    g_cfgMode = Cfg::Mode_Swap;
-            else if (!_stricmp(mode, "aa"))      g_cfgMode = Cfg::Mode_AA;
             else                                 g_cfgMode = Cfg::Mode_Observe;
 
             GetPrivateProfileStringA("VectorText", "FontFile",
@@ -189,32 +205,20 @@ namespace vt
             g_cfgSizeLatin  = GetPrivateProfileIntA("VectorText", "FontSizeLatin", 13, ini);
             g_cfgSizeCJK    = GetPrivateProfileIntA("VectorText", "FontSizeCJK", 16, ini);
             g_cfgBaseline   = GetPrivateProfileIntA("VectorText", "BaselineRow", 13, ini);
-            g_cfgFit        = GetPrivateProfileIntA("VectorText", "FitToAdvance", 1, ini) != 0;
-            g_cfgAA         = GetPrivateProfileIntA("VectorText", "AntiAlias", 1, ini) != 0;
-            g_cfgFallback   = GetPrivateProfileIntA("VectorText", "FallbackOnError", 1, ini) != 0;
-            g_cfgProbe      = GetPrivateProfileIntA("VectorText", "Probe", 1, ini) != 0;
+            g_cfgFit        = ReadBool(ini, "FitToAdvance", true);
+            g_cfgAA         = ReadBool(ini, "AntiAlias", true);
+            g_cfgProbe      = ReadBool(ini, "Probe", true);
             g_cfgDarkening  = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
             g_cfgSS         = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
-            g_cfgLinear     = GetPrivateProfileIntA("VectorText", "LinearBlend", 1, ini) != 0;
-            g_cfgDither     = GetPrivateProfileIntA("VectorText", "Dither", 1, ini) != 0;
+            g_cfgLinear     = ReadBool(ini, "LinearBlend", true);
+            g_cfgDither     = ReadBool(ini, "Dither", true);
+            g_cfgLegacy1252 = ReadBool(ini, "LegacyCodepage1252", true);
+            g_cfgHiDPI      = ReadBool(ini, "HiDPI", true);
             g_cfgOutline    = GetPrivateProfileIntA("VectorText", "Outline", 0, ini);
             {
                 char oc[32] = { 0 };
                 GetPrivateProfileStringA("VectorText", "OutlineColor", "0x0000", oc, sizeof(oc), ini);
                 g_cfgOutlineColor = (unsigned int)strtoul(oc, NULL, 0) & 0xFFFFu;
-            }
-            {
-                char ex[256] = { 0 };
-                GetPrivateProfileStringA("VectorText", "MetricsExcept", "", ex, sizeof(ex), ini);
-                char* p = ex;
-                while (*p && g_cfgExceptN < 8)
-                {
-                    while (*p == ' ' || *p == ',') ++p;
-                    if (!*p) break;
-                    unsigned int v = (unsigned int)strtoul(p, &p, 0);
-                    if (v) g_cfgExcept[g_cfgExceptN++] = v;
-                    while (*p && *p != ',') ++p;
-                }
             }
             if (g_cfgSS < 1) g_cfgSS = 1;
             if (g_cfgSS > 4) g_cfgSS = 4;
@@ -433,10 +437,8 @@ namespace vt
                 WriteLine("===================================================================");
                 WriteLine(g_cfgMode == Cfg::Mode_Draw
                     ? " VectorText M1 -- vector text takeover ACTIVE (Mode=draw, own pixel writes)"
-                    : g_cfgMode == Cfg::Mode_AA
-                    ? " VectorText M1 -- vector glyphs ACTIVE (Mode=aa, antialiased, no skip)"
-                    : g_cfgMode == Cfg::Mode_Swap
-                    ? " VectorText M1 -- vector glyphs ACTIVE (Mode=swap, engine draws our data)"
+                    : g_cfgMode == Cfg::Mode_Off
+                    ? " VectorText -- disabled (Mode=off)"
                     : " VectorText M1 -- observation only, no drawing behaviour is changed");
                 WriteLine(Format(" log=%s%s  enabled=%d detailed=%d blitDetails=%d maxUnique=%d flush=%ums",
                                  g_dir, g_logName, (int)g_enabled, (int)g_detailed,
@@ -455,7 +457,7 @@ namespace vt
                 return;
             EnterCriticalSection(&g_cs);
             WriteSummary(true);
-            if (g_cfgMode != Cfg::Mode_Observe && g_cfgMode != Cfg::Mode_Off)
+            if (g_cfgMode == Cfg::Mode_Draw)
             {
                 unsigned long long drawn = 0, skipped = 0, failed = 0, unknown = 0;
                 Takeover::Stats(&drawn, &skipped, &failed, &unknown);
@@ -492,6 +494,7 @@ namespace vt
             if (!g_enabled)
                 return;
 
+            if (!g_detailed) { Count(hookId); return; }
             std::wstring key(text ? text : L"");
             bool logNew = false;
             std::string line;
@@ -588,7 +591,6 @@ namespace vt
         int BaselineRow()        { Load(); return g_cfgBaseline; }
         bool FitToAdvance()      { Load(); return g_cfgFit; }
         bool AntiAlias()         { Load(); return g_cfgAA; }
-        bool FallbackOnError()   { Load(); return g_cfgFallback; }
         bool Probe()             { Load(); return g_cfgProbe; }
         int  StemDarkening()     { Load(); return g_cfgDarkening; }
         double Gamma()           { Load(); return g_cfgGamma; }
@@ -599,8 +601,8 @@ namespace vt
         bool Dither()            { Load(); return g_cfgDither; }
         int  Outline()           { Load(); return g_cfgOutline; }
         unsigned short OutlineColor() { Load(); return (unsigned short)g_cfgOutlineColor; }
-        int  MetricsExceptCount(){ Load(); return g_cfgExceptN; }
-        unsigned int MetricsExceptAt(int i) { Load(); return (i >= 0 && i < g_cfgExceptN) ? g_cfgExcept[i] : 0u; }
+        bool LegacyCodepage1252() { Load(); return g_cfgLegacy1252; }
+        bool HiDPI()             { Load(); return g_cfgHiDPI; }
 
         void ConfigStr(const char* key, const char* def, char* out, int cch)
         {
@@ -609,6 +611,14 @@ namespace vt
                 GetGameDir();
             _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
             GetPrivateProfileStringA("VectorText", key, def, out, (DWORD)cch, ini);
+        }
+
+        bool ConfigBool(const char* key, bool def)
+        {
+            char ini[MAX_PATH];
+            if (!g_dir[0]) GetGameDir();
+            _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
+            return ReadBool(ini,key,def);
         }
 
         int ConfigInt(const char* key, int def)

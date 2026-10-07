@@ -1,9 +1,12 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "Takeover.h"
 #include "GlyphSource.h"
 #include "PixelWriter.h"
 #include "Logger.h"
 
 #include <string.h>
+#include <vector>
 
 namespace vt
 {
@@ -16,6 +19,15 @@ namespace vt
         static double        g_advScale = 1.0;       // Metrics=scaled
         static bool          g_subpixel = true;      // Subpixel=1
 
+        // Keep fractional layout/kerning regardless of raster positioning.
+        // Snap only the final origin; rounding advances would accumulate drift.
+        static int LineRasterX(int q, int* phase)
+        {
+            const int x = (int)floor((q + (g_subpixel ? 0 : 2)) / 4.0);
+            *phase = g_subpixel ? q - x * 4 : 0;
+            return x;
+        }
+
         // ---- subpixel pen -------------------------------------------------
         // The engine only ever deals in integer pen positions, so we keep the
         // fractional part ourselves: the advance we publish is rounded, and the
@@ -24,36 +36,6 @@ namespace vt
         // ideal fractional positions while the engine sees a normal integer run.
         static __declspec(thread) double t_ideal = 0.0;
         static __declspec(thread) bool   t_hasIdeal = false;
-
-        // ---- per-caller metrics -------------------------------------------
-        // A few fixed-size UI boxes were laid out for the bitmap font and cannot
-        // take wider text (the mission-objectives panel is the only one the
-        // offline audit found).  The caller is recognised by walking the stack
-        // for a code address near a configured one: a UI function that measures
-        // and then draws has *different* addresses for the two calls, so the
-        // match is by neighbourhood (~1 KB) rather than by exact address.
-        static bool CallerWantsGameMetrics(unsigned int esp)
-        {
-            const int n = Cfg::MetricsExceptCount();
-            if (!n || !esp)
-                return false;
-
-            // the stack is plain memory; a bad read is caught by the caller
-            const unsigned int* p = (const unsigned int*)(uintptr_t)esp;
-            for (int i = 0; i < 24; ++i)
-            {
-                const unsigned int v = p[i];
-                if (v < 0x00401000u || v > 0x00700000u)
-                    continue;                        // not a code address
-                for (int k = 0; k < n; ++k)
-                {
-                    const unsigned int e = Cfg::MetricsExceptAt(k);
-                    if (v >= e && v < e + 0x400u)
-                        return true;
-                }
-            }
-            return false;
-        }
 
         static int SubpixelPhase(int x, double trueAdvance, int* published)
         {
@@ -81,7 +63,8 @@ namespace vt
         static bool          g_ready = false;
         static unsigned long long g_drawn = 0, g_skipped = 0, g_failed = 0, g_unknown = 0;
 
-        // why we handed a glyph back to the engine (all zero in a healthy run)
+        // Why we handed a glyph back. Native clipping and bitmap-only symbols
+        // can legitimately use the engine path; counts alone are not errors.
         enum Reason
         {
             R_NotReady = 0, R_NoInternal, R_NotLocked, R_BadMetrics, R_FontMetrics,
@@ -102,7 +85,7 @@ namespace vt
         static const char* const kStageNames[] =
         {
             "start", "probe", "init", "fontdata", "bounds", "rasterised",
-            "written", "skip-computed", "skipped", "returned"
+            "written", "skip-computed", "skipped", "skip-dispatched"
         };
         static const int kStageCount = (int)(sizeof(kStageNames) / sizeof(kStageNames[0]));
 
@@ -135,8 +118,6 @@ namespace vt
         //     83 C4 14   add esp, 0x14       ; drop it + the 4 arguments
         //     52         push edx
         //     C3         ret                 ; -> ESP = entry + 0x14, EIP = caller
-        bool TestCallerWantsGameMetrics(unsigned int esp) { return CallerWantsGameMetrics(esp); }
-
         void* SkipTrampoline()
         {
             static void* code = NULL;
@@ -179,8 +160,6 @@ namespace vt
             }
             return (int)g_origAdv[idx];
         }
-
-        bool SawDirectionFlag() { return g_sawDF; }
 
         void DiagLine(char* out, int cch)
         {
@@ -280,17 +259,18 @@ namespace vt
                 if (!cell || cell->advanceQ <= 0) return false;
                 penQ += (int)floor(g_src.KerningQuarter(previous, item.cp) * scale1024 / 1024.0 + 0.5);
                 int advanceQ = cell->advanceQ;
-                if (CompactMark(item.cp))
+                const unsigned int renderCp = g_src.RenderCodepoint(item.cp);
+                if (CompactMark(renderCp))
                 {
                     const int halfQ = Cfg::FontSizeCJK() * 2 * scale1024 / 1024;
                     const int inkQ = cell->inkRightQ - cell->inkLeftQ;
                     advanceQ = halfQ > inkQ + 2 ? halfQ : inkQ + 2;
-                    const int leftQ = OpeningMark(item.cp) ? advanceQ - 1 - inkQ : 1;
+                    const int leftQ = OpeningMark(renderCp) ? advanceQ - 1 - inkQ : 1;
                     item.shiftQ = leftQ - cell->inkLeftQ;
                 }
                 item.leftQ = cell->inkLeftQ + item.shiftQ;
                 item.rightQ = cell->inkRightQ + item.shiftQ;
-                if (prior && MixedBoundary(previous, item.cp))
+                if (prior && MixedBoundary(g_src.RenderCodepoint(previous), renderCp))
                 {
                     const int inkGapQ = penQ + item.leftQ - prior->penQ - prior->rightQ;
                     const int extraQ = Cfg::FontSizeCJK() * scale1024 / 1024 - inkGapQ;
@@ -328,14 +308,14 @@ namespace vt
 
         bool LineEnabled()
         {
-            static const bool requested = Cfg::ConfigInt("LineRender", 0) != 0;
+            static const bool requested = Cfg::ConfigBool("LineRender", false);
             return requested && Cfg::Mode() == Cfg::Mode_Draw &&
                    !Cfg::VectorMetrics() && Cfg::AdvanceScale() <= 1.0;
         }
 
         bool DynamicTextWidthEnabled()
         {
-            static const bool requested = Cfg::ConfigInt("DynamicTextWidth", 1) != 0;
+            static const bool requested = Cfg::ConfigBool("DynamicTextWidth", true);
             return requested && LineEnabled();
         }
 
@@ -389,6 +369,87 @@ namespace vt
                                  g_src.Lines(), extra, penQ, 1024)) return false;
                 legacyWidth += data[(size_t)(map[cp] - 1) * bytes] + extra;
                 previous = item.bitmap ? 0 : cp; prior = item; ++count;
+            }
+            return false;
+        }
+
+        bool MeasureTextInkY(void* bitFont, const wchar_t* text, int anchorX, int align, InkY* ink)
+        {
+            if (!DynamicTextWidthEnabled() || !bitFont || !text || !ink ||
+                anchorX < -32768 || anchorX > 32768) return false;
+            if (!g_tried) Init();
+            if (!g_ready) return false;
+            const unsigned char* bf = (const unsigned char*)bitFont;
+            const unsigned char* fd = *(const unsigned char* const*)(bf + BF_INTERNAL);
+            if (!fd || *(const int*)(fd + IF_LINES) != g_src.Lines()) return false;
+            const unsigned short* map = *(const unsigned short* const*)(fd + IF_SYMTABLE);
+            const unsigned char* data = *(const unsigned char* const*)(fd + IF_BITMAPS);
+            const unsigned int bytes = *(const unsigned int*)(fd + IF_SYMBOLBYTES);
+            const int extra = *(const int*)(bf + 0x2C);
+            if (!map || !data || !bytes || bytes > 4096 || extra < 0 || extra > 16) return false;
+            const int lineHeight = *(const int*)(bf + 0x1C);
+            std::vector<LineGlyph> items;
+            int penQ = 0, mixedQ = 0, rowY = 0, lines = 1;
+            int inkTop = 32768, inkBottom = -32768;
+            int inkLeft = 32768, inkRight = -32768;
+            unsigned int previous = 0;
+            for (int i = 0; i <= kLineLimit; ++i)
+            {
+                const unsigned int cp = text[i];
+                if (i == kLineLimit && cp) return false;
+                if (!cp || cp == '\r' || cp == '\n')
+                {
+                    bool rowInk = false;
+                    const int widthQ = items.empty() ? 0 :
+                        (penQ > items.back().penQ + items.back().rightQ ? penQ : items.back().penQ + items.back().rightQ);
+                    int originQ = anchorX * 4;
+                    if (align & 1) originQ -= (widthQ + 1) / 2;
+                    else if (align & 2) originQ -= widthQ;
+                    for (const LineGlyph& item : items)
+                    {
+                        int phase = 0;
+                        const int q = originQ + item.penQ + item.shiftQ;
+                        const int pixelX = item.bitmap ? (int)floor(q / 4.0) : LineRasterX(q, &phase);
+                        const GlyphCell* cell = item.bitmap ? NULL : g_src.Get(item.cp, -1, phase);
+                        if (!item.bitmap && !cell) return false;
+                        const int rows = item.bitmap ? g_src.Lines() : cell->inkRows;
+                        for (int row = 0; row < rows; ++row) for (int col = 0; col < 24; ++col)
+                        {
+                            const bool lit = item.bitmap ? col < item.bitmap[0] &&
+                                (item.bitmap[1 + row * 3 + col / 8] & (0x80 >> (col & 7))) != 0 :
+                                (Cfg::AntiAlias() ? cell->cov[row * 24 + col] != 0 :
+                                (cell->bits[row * 3 + col / 8] & (0x80 >> (col & 7))) != 0);
+                            if (!lit) continue;
+                            rowInk = true;
+                            const int litX = pixelX + col + (cell ? cell->inkX : 0);
+                            if (litX < inkLeft) inkLeft = litX;
+                            if (litX + 1 > inkRight) inkRight = litX + 1;
+                            const int pixelY = rowY + row + (cell ? cell->inkY : 0);
+                            if (pixelY < inkTop) inkTop = pixelY;
+                            if (pixelY + 1 > inkBottom) inkBottom = pixelY + 1;
+                        }
+                    }
+                    // Keep deliberately empty first/last rows rather than
+                    // mistaking them for unused font-cell padding.
+                    if ((!cp || lines == 1) && !rowInk) return false;
+                    if (!cp)
+                    {
+                        if (inkBottom <= inkTop || inkBottom > 32768) return false;
+                        *ink = { inkTop, inkBottom, lines, inkLeft, inkRight };
+                        return true;
+                    }
+                    if (lineHeight < 1 || lineHeight > 128 || rowY > 32768 - lineHeight) return false;
+                    if (cp == '\r' && text[i + 1] == '\n') ++i;
+                    rowY += lineHeight; ++lines;
+                    items.clear(); penQ = mixedQ = 0; previous = 0;
+                    continue;
+                }
+                if (cp < 0x20 || (cp >= 0xD800 && cp <= 0xDFFF) || !map[cp]) return false;
+                LineGlyph item = {}; item.cp = cp;
+                if (!NaturalGlyph(item, previous, items.empty() ? NULL : &items.back(), penQ, 1024, mixedQ) &&
+                    !BitmapGlyph(item, data + (size_t)(map[cp] - 1) * bytes, bytes, g_src.Lines(), extra, penQ, 1024)) return false;
+                previous = item.bitmap ? 0 : cp;
+                items.push_back(item);
             }
             return false;
         }
@@ -558,8 +619,9 @@ namespace vt
                 const LineGlyph& item = t_line.glyphs[j];
                 if (item.cp == '\t' || item.bitmap) continue;
                 const int q = t_line.originQ + item.penQ + item.shiftQ;
-                const int x = (int)floor(q / 4.0);
-                if (!g_src.Get(item.cp, -1, q - x * 4, scale1024)) return false;
+                int phase;
+                LineRasterX(q, &phase);
+                if (!g_src.Get(item.cp, -1, phase, scale1024)) return false;
             }
             t_line.active = true;
             for (int j = 0; j < t_line.count; ++j)
@@ -573,9 +635,9 @@ namespace vt
                 }
             if (InterlockedIncrement(&g_lineLogged) <= 3)
                 Log::Note("LINE ready: count=%d width=%d/4px box=%dpx scale=%d/1024 mixed-gap=%d/4px tightened=%d/4px "
-                          "x=%d/4px y=%d caller=0x%08X",
+                          "x=%d/4px y=%d caller=0x%08X raster-subpixel=%d",
                           t_line.count, widthQ, width, scale1024, t_line.mixedAddedQ, t_line.tightenedQ,
-                          t_line.originQ, y, blitCaller);
+                          t_line.originQ, y, blitCaller, g_subpixel ? 1 : 0);
             return true;
         }
 
@@ -594,8 +656,10 @@ namespace vt
             if (ch != '\t')
             {
                 const int q = t_line.originQ + item.penQ + item.shiftQ;
-                const int drawX = (int)floor(q / 4.0);
-                const int phase = q - drawX * 4;
+                int phase;
+                phase = 0;
+                // Native 1bpp icons already use integer pixel coordinates.
+                const int drawX = item.bitmap ? (int)floor(q / 4.0) : LineRasterX(q, &phase);
                 GlyphCell native;
                 const GlyphCell* cell;
                 if (item.bitmap)
@@ -635,24 +699,20 @@ namespace vt
             const char* ttf = Cfg::FontFile();
             g_vecMetrics = Cfg::VectorMetrics();
             g_advScale = Cfg::AdvanceScale();
-            g_subpixel = Cfg::ConfigInt("Subpixel", 1) != 0;
-            Log::Note("M1 metrics: mode=%d advanceScale=%.3f subpixel=%d supersample=%d dropout-exceptions=%d",
-                      (int)Cfg::Mode(), g_advScale, g_subpixel ? 1 : 0, Cfg::Supersample(), Cfg::MetricsExceptCount());
-            // natural metrics means no horizontal condensing: the glyph keeps
-            // its own width and we hand that width to the engine (see below)
+            g_subpixel = Cfg::ConfigBool("Subpixel", true);
+            g_src.SetLegacyCodepage1252(Cfg::LegacyCodepage1252());
+            Log::Note("M1 metrics: mode=%d advanceScale=%.3f subpixel=%d supersample=%d",
+                      (int)Cfg::Mode(), g_advScale, g_subpixel ? 1 : 0, Cfg::Supersample());
+            // Vector metrics keep the fallback glyph's natural width; the
+            // engine's loop still receives its original advance below.
             g_src.SetFitToAdvance(!g_vecMetrics && Cfg::FitToAdvance());
 
-            // Swap mode feeds the engine's 1bpp pipeline: the cell MUST be
-            // rasterised monochrome.  Thresholding grayscale coverage at 128
-            // hollows out thin serif strokes (seen in-game), because most edge
-            // pixels of a 13 px serif glyph sit below 50% coverage.
-            const bool useAA = Cfg::AntiAlias() && (Cfg::Mode() == Cfg::Mode_Draw || Cfg::Mode() == Cfg::Mode_AA);
+            const bool useAA = Cfg::AntiAlias() && Cfg::Mode() == Cfg::Mode_Draw;
             g_src.SetAntiAlias(useAA);
             g_src.SetStemDarkening(Cfg::StemDarkening());
             g_src.SetSupersample(Cfg::Supersample());
             g_src.SetHinting(Cfg::ConfigInt("Hinting", 0));
-            g_src.SetClassAlign(Cfg::ConfigInt("ClassAlign", 1) != 0);
-            g_src.SetFitMode(Cfg::ConfigInt("FitMode", 0) != 0 ? 1 : 0);
+            g_src.SetHighResolution(Cfg::ConfigBool("Present32",true) && Cfg::HiDPI());
             SetCoverageGamma(Cfg::Gamma());
             SetLinearBlend(Cfg::LinearBlend());
             SetDither(Cfg::Dither());
@@ -673,6 +733,8 @@ namespace vt
             if (latinFont[0])
                 Log::Note("Latin font %s: \"%s\"", g_src.SetLatinFont(latinFont) ? "ready" : "fallback", latinFont);
             g_ready = true;
+            Log::Note("Text options: LegacyCodepage1252=%s HiDPI=%s",
+                      Cfg::LegacyCodepage1252() ? "true" : "false", Cfg::HiDPI() ? "true" : "false");
             SetStage(2);
 
             Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d hinting=%d",
@@ -682,7 +744,8 @@ namespace vt
             return true;
         }
 
-        bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX)
+        bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX,
+                     unsigned int caller)
         {
             // lazy one-time font load; TryBlit is the only entry point the hook
             // uses, so the init lives here (and nowhere else can forget it)
@@ -742,11 +805,36 @@ namespace vt
                 return false;
             }
 
+            const int* bounds = (const int*)(bf + BF_BOUNDS);
+            Target t;
+            t.base = (unsigned short*)base;
+            t.pitch = pitch;
+            t.clipL = bounds[0] > 0 ? bounds[0] : 0;
+            t.clipT = bounds[1] > 0 ? bounds[1] : 0;
+            t.clipR = bounds[2] < pitch - 1 ? bounds[2] : pitch - 1;
+            t.clipB = bounds[3];
+            const bool rawInvalid = bounds[2] <= bounds[0] || bounds[3] <= bounds[1];
+            if (rawInvalid || t.clipR < t.clipL || t.clipB < t.clipT)
+            {
+                ++g_failed;
+                const unsigned long long n = ++g_reason[R_BadBounds];
+                // First failures plus exponentially spaced samples show later
+                // gameplay without producing tens of thousands of log lines.
+                if (n <= 8 || (n & (n - 1)) == 0)
+                    Log::Note("REFUSE bounds #%llu kind=%s caller=0x%08X bf=0x%p base=0x%p "
+                              "pitch=%d bounds=%d,%d,%d,%d clip=%d,%d,%d,%d "
+                              "ch=U+%04X x=%d y=%d tracking=%d nativeClip=%u",
+                              n, rawInvalid ? "raw-clip" : "surface-clip", caller, bitFont, base,
+                              pitch, bounds[0], bounds[1], bounds[2], bounds[3],
+                              t.clipL, t.clipT, t.clipR, t.clipB, ch, x, y,
+                              *(const int*)(bf + 0x2C), (unsigned)bf[0x41]);
+                return false; // Do not mutate glyph widths on a refusal.
+            }
+
             unsigned char* slot0 = (unsigned char*)(bitmaps + (size_t)(idx - 1) * symbolBytes);
             const unsigned char* glyph = slot0;
-            // Same metrics logic as the antialiased path: this mode used to read
-            // the raw advance byte only, so Metrics=scaled/vector had no effect
-            // here and the glyphs were condensed harder than in aa mode.
+            // Keep the remembered native advance when scaled/vector metrics
+            // publish a different advance into the engine slot.
             // callerEsp is not available in this path (no hook stack), so the
             // exception table is applied by the caller of TryBlit via `x`.
             const int gameAdvance = OrigAdvance(idx, glyph[0]);
@@ -772,34 +860,6 @@ namespace vt
                 ? *(const unsigned short*)(bf + BF_COLOR)
                 : (unsigned short)colorArg;
 
-            const int* bounds = (const int*)(bf + BF_BOUNDS);
-
-            // BitFont::Lock guarantees a usable clip rectangle: if the caller
-            // never called SetBounds, Lock fills it with (0, 0, width-1,
-            // height-1) of the surface, otherwise it intersects the caller's
-            // box with the surface.  So a degenerate box means "do not touch
-            // anything" -> hand the glyph back to the engine.
-            if (bounds[2] <= bounds[0] || bounds[3] <= bounds[1])
-            {
-                ++g_failed;
-                ++g_reason[R_BadBounds];
-                return false;
-            }
-
-            Target t;
-            t.base  = (unsigned short*)base;
-            t.pitch = pitch;
-            t.clipL = bounds[0] > 0 ? bounds[0] : 0;
-            t.clipT = bounds[1] > 0 ? bounds[1] : 0;
-            t.clipR = bounds[2] < pitch - 1 ? bounds[2] : pitch - 1;
-            t.clipB = bounds[3];
-            if (t.clipR < t.clipL || t.clipB < t.clipT)
-            {
-                ++g_failed;
-                ++g_reason[R_BadBounds];
-                return false;
-            }
-
             if (Cfg::AntiAlias())
                 DrawCellAA(t, *cell, x, y, lines, color, RGB565);
             else
@@ -809,159 +869,10 @@ namespace vt
 
             ++g_drawn;
             if (newX)
-                *newX = x + cell->width;
-            return true;
-        }
-
-        // ------------------------------------------------------------------
-        //  Mode=swap: replace the glyph *data* in the engine's own font tables.
-        //
-        //  The bytes we write are exactly the bytes the engine reads: one width
-        //  byte followed by strideBytes*lines 1bpp rows.  So the engine's Blit
-        //  draws our vector glyph with its own addressing, clipping, colour,
-        //  shadow and reveal logic -- and we never touch the stack or the
-        //  instruction pointer.  Idempotent: the slot is compared first, which
-        //  also makes it survive a font reload.
-        // ------------------------------------------------------------------
-        bool SwapGlyph(void* bitFont, unsigned int ch)
-        {
-            if (!g_tried)
-                Init();
-            if (!bitFont || !g_ready)
-                return false;
-
-            const unsigned char* bf = (const unsigned char*)bitFont;
-            const unsigned char* internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
-            if (!internal)
-                return false;
-
-            const unsigned short* symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
-            const unsigned int symbolBytes = *(const unsigned int*)(internal + IF_SYMBOLBYTES);
-            unsigned char* bitmaps = *(unsigned char* const*)(internal + IF_BITMAPS);
-            const int lines = *(const int*)(internal + IF_LINES);
-
-            if (!symTable || !bitmaps || lines != g_src.Lines())
-                return false;
-
-            // the slot must hold exactly: width byte + stride*lines bitmap bytes
-            if (symbolBytes != 1 + (unsigned int)(g_src.StrideBytes() * lines))
-                return false;
-
-            const unsigned int idx = symTable[ch & 0xFFFF];
-            if (idx == 0)
-                return false;
-
-            unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
-
-            // Metrics=game  : keep the engine's advance (layout byte-identical)
-            // Metrics=vector: use FreeType's advance and write it back, so the
-            //                 engine's drawing AND measuring follow our metrics
-            // Swap mode never sees the pen position (the engine draws the cell
-            // itself), so no subpixel phase is possible here
-            const int gameAdvance = OrigAdvance(idx, slot[0]);   // the engine's own advance (remembered)
-            const int advance = g_vecMetrics ? -1
-                              : (g_advScale > 1.0 ? (int)(gameAdvance * g_advScale + 0.5) : gameAdvance);
-            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1, 0, 1024, true);
-            if (!cell)
-                return false;
-
-            // compare before writing: idempotent and cheap (49 bytes)
-            if (slot[0] == cell->width &&
-                memcmp(slot + 1, cell->bits, symbolBytes - 1) == 0)
-                return true;
-
-            slot[0] = cell->width;                           // same value as before
-            memcpy(slot + 1, cell->bits, symbolBytes - 1);
-            SetStage(6);                                     // engine data now holds our cell
-            ++g_drawn;
-            return true;
-        }
-
-        // ------------------------------------------------------------------
-        //  Mode=aa: antialiased text with zero control-flow modification.
-        // ------------------------------------------------------------------
-        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg, unsigned int callerEsp)
-        {
-            if (!g_tried)
-                Init();
-            if (!bitFont || !g_ready)
-                return false;
-
-            const unsigned char* bf = (const unsigned char*)bitFont;
-            const unsigned char* internal = *(const unsigned char* const*)(bf + BF_INTERNAL);
-            if (!internal)
-                return false;
-
-            void* base = *(void* const*)(bf + BF_BUFFER);
-            const int pitch = *(const int*)(bf + BF_PITCH);
-            if (!base || pitch <= 0)
-                return false;
-
-            const unsigned short* symTable = *(const unsigned short* const*)(internal + IF_SYMTABLE);
-            const unsigned int symbolBytes = *(const unsigned int*)(internal + IF_SYMBOLBYTES);
-            unsigned char* bitmaps = *(unsigned char* const*)(internal + IF_BITMAPS);
-            const int lines = *(const int*)(internal + IF_LINES);
-            if (!symTable || !bitmaps || lines != g_src.Lines())
-                return false;
-            if (symbolBytes != 1 + (unsigned int)(g_src.StrideBytes() * lines))
-                return false;
-
-            const unsigned int idx = symTable[ch & 0xFFFF];
-            if (idx == 0)
-                return false;
-
-            unsigned char* slot = bitmaps + (size_t)(idx - 1) * symbolBytes;
-            // Antialiased path: we know the pen position, so the fractional
-            // advance can be carried across glyphs (subpixel positioning)
-            const int gameAdvance = OrigAdvance(idx, slot[0]);   // the engine's own advance (remembered)
-            // fixed-size UI boxes keep the engine's metrics: no scaling, no
-            // natural advance, no subpixel drift
-            const bool keepGame = CallerWantsGameMetrics(callerEsp);
-            if (keepGame && (g_drawn % 512) == 0)
-                Log::Note("M1 metrics: excepted caller (stack 0x%08X) keeps the engine advance (x=%d wch=U+%04X)", callerEsp, x, ch);
-            const double trueAdv = (!keepGame && g_advScale > 1.0) ? gameAdvance * g_advScale
-                                                                  : (double)gameAdvance;
-            int published = gameAdvance;
-            const int phase = keepGame ? 0 : SubpixelPhase(x, trueAdv, &published);
-            const int advance = (g_vecMetrics && !keepGame) ? -1 : published;
-
-            const GlyphCell* cell = g_src.Get(ch, advance > 0 ? advance : -1, phase);
-            if (!cell)
-                return false;
-
-            // with natural metrics the engine must advance (and measure) by our
-            // own width, so it is written into the glyph's advance byte
-            if (g_vecMetrics && slot[0] != cell->width)
-                slot[0] = cell->width;
-
-            const unsigned short color = (colorArg == -1)
-                ? *(const unsigned short*)(bf + BF_COLOR)
-                : (unsigned short)colorArg;
-
-            const int* bounds = (const int*)(bf + BF_BOUNDS);
-            Target t;
-            t.base  = (unsigned short*)base;
-            t.pitch = pitch;
-            t.clipL = bounds[0] > 0 ? bounds[0] : 0;
-            t.clipT = bounds[1] > 0 ? bounds[1] : 0;
-            t.clipR = bounds[2] < pitch - 1 ? bounds[2] : pitch - 1;
-            t.clipB = bounds[3];
-            if (t.clipR < t.clipL || t.clipB < t.clipT)
-                return false;
-
-            // 1) our antialiased pixels go in first ...
-            DrawCellAA(t, *cell, x, y, lines, color, RGB565);
-
-            // 2) ... and the engine's own pass must draw nothing over them, so
-            //    its glyph bitmap is zeroed UNCONDITIONALLY.  (A "clear it only
-            //    if it looks non-empty" shortcut silently skipped most glyphs:
-            //    the top-left and bottom-right bytes of our cells are usually
-            //    zero already, which left the engine drawing its own bitmap on
-            //    top of our antialiased glyph -> visibly doubled, smeared text.)
-            memset(slot + 1, 0, symbolBytes - 1);
-
-            SetStage(6);
-            ++g_drawn;
+                // Native BitFont::Blit reads +2C; it does not update a tracking
+                // accumulator. Both the drawn and clipped native paths return
+                // X + glyph advance + this constant spacing (0x4344E4).
+                *newX = x + cell->width + *(const int*)(bf + 0x2C);
             return true;
         }
 

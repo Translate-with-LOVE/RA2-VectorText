@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -17,7 +19,7 @@
 //    * the function's return value is the next pen X, so we return
 //      X + <original advance>; a line plan also retains the engine's +0x2C
 //      tracking so its string loop and wrapping remain internally consistent.
-//  We only ever *write* pixels ourselves -- the M1 plan B requirement.
+//  Glyph coverage is written through the native or presentation pixel writer.
 // ===========================================================================
 
 namespace vt
@@ -30,8 +32,9 @@ namespace vt
         // Try to draw `ch` at (x, y) instead of the bitmap glyph.
         // colorArg mirrors BitFont::Blit's 4th argument: -1 means "use the
         // font's current colour" (BitFont+0x24).
-        // On success, *newX = x + <advance of the original glyph>.
-        bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX);
+        // On success, *newX = x + glyph advance + native spacing at +0x2C.
+        bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX,
+                     unsigned int caller = 0);
 
         // Prepare exactly the line selected by the engine. count=-1 reads a
         // bounded NUL-terminated DrawString; otherwise count is an exclusive
@@ -50,26 +53,13 @@ namespace vt
         // retain their original metrics. Leaves an active draw plan untouched.
         bool DynamicTextWidthEnabled();
         bool MeasureDynamicWidth(void* bitFont, const wchar_t* text, int maxWidth, int* width);
+        // Vertical raster bounds relative to the first row's Y. Explicit
+        // newlines retain the native line height; bottom/right are exclusive.
+        // Horizontal bounds include the supplied anchor and actual raster phase.
+        struct InkY { int top, bottom, lines, left, right; };
+        bool MeasureTextInkY(void* bitFont, const wchar_t* text, int anchorX, int align, InkY* ink);
         struct LineInfo { int count, widthQ, originQ, consumed, boxWidth, mixedAddedQ, tightenedQ, scale1024; };
         bool GetLineInfo(LineInfo* info);
-
-        // Mode=swap: write our rasterised cell into the *game's own* glyph slot
-        // in memory, then let the engine draw it.  No control flow, no stack
-        // manipulation -- the engine keeps doing addressing, clipping, shadows
-        // and the reveal ramp, it just draws vector shapes instead of bitmaps.
-        // Returns true when the font data now holds our glyph.
-        bool SwapGlyph(void* bitFont, unsigned int ch);
-
-        // Mode=aa: antialiased text without touching the call flow.
-        //   1. we blend our vector glyph into the game's 16-bit surface
-        //      ourselves (that is where the antialiasing comes from),
-        //   2. we zero the *bitmap* of the engine's glyph slot for this
-        //      character (the advance byte stays), so the engine's own pass
-        //      writes nothing over our pixels,
-        //   3. the hook returns 0: the engine runs normally, its epilogue
-        //      restores the registers, and its return value (X + advance) is
-        //      the correct pen position.
-        bool DrawAA(void* bitFont, unsigned int ch, int x, int y, int colorArg, unsigned int callerEsp);
 
         // Read-only field dump, logged once per distinct BitFont object.  Runs
         // in observe mode too, so a single safe run proves (or disproves) the
@@ -92,10 +82,6 @@ namespace vt
 
         // The stack fix-up used instead of R->ESP (which Syringe drops).
         void* SkipTrampoline();
-
-        // test entry: does the stack at sp belong to a caller that must keep
-        // the engine's own metrics?
-        bool TestCallerWantsGameMetrics(unsigned int esp);
 
         // One-line diagnostic state, reported in the FINAL log summary so that
         // even a hard crash tells us how far the takeover got.

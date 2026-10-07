@@ -1,6 +1,9 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include <windows.h>
 #include <map>
+#include <vector>
 
 // ===========================================================================
 //  GlyphSource -- turns codepoints into glyph cells in *the engine's* format.
@@ -9,8 +12,8 @@
 //      byte 0            : advance width in pixels
 //      strideBytes*lines : 1bpp rows, MSB first, 1 = ink
 //
-//  M1 draws these cells itself (plan B); the same layout is what the engine's
-//  own Blit consumes, so swapping the source later is a one-line change.
+//  Glyphs retain monochrome masks and grayscale coverage for both native
+//  RGB565 drawing and the optional presentation adapter.
 //
 //  Two faces are kept open when the Latin and CJK pixel sizes differ (the
 //  game's own font is two sizes as well): calling FT_Set_Pixel_Sizes per glyph
@@ -19,6 +22,11 @@
 
 namespace vt
 {
+    struct GlyphRaster2
+    {
+        int left=0, top=0, width=0, rows=0;
+        std::vector<unsigned char> coverage;
+    };
     struct GlyphCell
     {
         unsigned char width;                 // engine advance (pixels)
@@ -27,6 +35,7 @@ namespace vt
         int inkX;                            // natural glyph bearing, in pixels
         int inkY, inkRows;                    // natural vertical bearing/height; 0 rows = legacy cell
         int advanceQ, inkLeftQ, inkRightQ;   // quarter-pixel natural metrics
+        const GlyphRaster2* raster2;          // optional outline raster at 2x; cache-owned
     };
 
     class GlyphSource
@@ -50,6 +59,8 @@ namespace vt
         // Optional Latin face chosen for the game's narrow ASCII advances.
         // The CJK face stays on FontFile; no character proportions are changed.
         bool SetLatinFont(const char* path);
+        void SetLegacyCodepage1252(bool on);
+        unsigned int RenderCodepoint(unsigned int cp) const;
 
         // Uniformly fit an outline into an explicit engine advance. Natural
         // line rendering passes -1 and retains the font's horizontal metrics.
@@ -71,22 +82,13 @@ namespace vt
         // Grayscale grid fitting: 0=light (vertical), 1=normal, 2=unhinted.
         // With Supersample=1, hinting works on the actual destination grid.
         void SetHinting(int mode);
-
-        // Fitting preserves proportions and happens on the outline before
-        // rendering. Kept for compatibility with older INI files/tests.
-        void SetFitMode(int mode) { m_fitMode = mode; }
-
-        // Legacy switch retained for callers. Natural line glyphs share one
-        // baseline; fixed engine slots still require compatibility fitting.
-        void SetClassAlign(bool on) { m_classAlign = on; }
+        void SetHighResolution(bool on);
 
         bool Ready() const { return m_faceA != NULL; }
-        bool AntiAlias() const { return m_aa; }
-        void* LibHandle() const { return m_lib; }         // FT_Library, for diagnostics
         void* FaceHandle() const { return m_faceA; }      // Latin face
         void* FaceHandleFor(unsigned int codepoint) const
         {
-            return (UsesCJKFace(codepoint) && m_faceB) ? m_faceB : m_faceA;
+            return (UsesCJKFace(RenderCodepoint(codepoint)) && m_faceB) ? m_faceB : m_faceA;
         }
 
         // gameAdvance: the advance taken from the game's font (Metrics=game).
@@ -95,29 +97,23 @@ namespace vt
         // phase = signed horizontal subpixel shift in quarter pixels (-3..3); it is
         // baked into the rasterised coverage, so the engine can keep drawing at
         // integer positions while the ink lands on a fractional pen position.
-        // engineSlot is only for copying a fixed 1bpp cell into game.fnt.
         // Direct pixel drawing preserves vertical bearings for every script,
         // even when horizontal fitting uses an explicit legacy advance.
-        const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0, int scale1024 = 1024, bool engineSlot = false);
+        const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0, int scale1024 = 1024);
         int KerningQuarter(unsigned int left, unsigned int right);
 
-        int  StrideBytes() const { return m_stride; }
         int  Lines() const { return m_lines; }
-        int  BaselineRow() const { return m_baseline; }
-        void SetBaselineRow(int row) { m_baseline = row; }
         size_t CachedGlyphs() const { return m_cache.size(); }
-
-        void SetAAInternal(bool on) { m_aa = on; }        // used by SetAntiAlias
 
     private:
         bool UsesCJKFace(unsigned int codepoint) const;
         void* OpenFace(int pixelSize, const char* path = NULL);
         void  CloseFace(void** face);
+        void ClearCache();
 
         void* m_lib;                          // FT_Library
         void* m_faceA;                        // Latin / default size
         void* m_faceB;                        // CJK size (NULL when identical)
-        int   m_size;
         int   m_sizeLatin;
         int   m_sizeCJK;
         unsigned int m_cjkFrom;
@@ -129,9 +125,7 @@ namespace vt
         int   m_darkening;
         int   m_ss;
         int   m_hinting;
-        int   m_fitMode;
         int   m_darkErr[3];
-        bool  m_classAlign;
     public:
         const int* StemDarkeningErrors() const { return m_darkErr; }
     private:
@@ -142,5 +136,10 @@ namespace vt
         CRITICAL_SECTION m_cs;
         bool  m_csInit;
         std::map<unsigned long long, GlyphCell> m_cache;
+        std::map<unsigned long long, GlyphRaster2> m_highCache;
+        void* m_highA=nullptr;
+        void* m_highB=nullptr;
+        bool m_highResolution=false;
+        bool m_legacy1252=false;
     };
 }

@@ -1,20 +1,19 @@
-#ifdef VT_BASELINE
-#include "../build/render-qa/baseline-src/GlyphSource.h"
-#include "../build/render-qa/baseline-src/PixelWriter.h"
-#else
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #include "../src/GlyphSource.h"
 #include "../src/PixelWriter.h"
-#endif
 #include "../src/Takeover.h"
 #include "../src/Logger.h"
+#include "../src/PixelPlane.h"
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
 #include <vector>
+#include <string>
 
-// Uses the production per-character takeover and a real game.fnt table.
+// Uses the production takeover and a real game.fnt table.
 // Run beside an INI copy, so QA never changes the game's config or log.
 #pragma pack(push, 1)
 struct FontData {
@@ -24,7 +23,16 @@ struct FontData {
 };
 #pragma pack(pop)
 
-static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels, int w, int h) {
+static vt::PixelPlane* previewPlane = nullptr;
+static int PaintPreview(const vt::Target& target, const vt::GlyphCell& cell,
+                        int x, int y, int rows, unsigned short color, bool) {
+    previewPlane->Paint(cell, x, y, rows, color,
+        {target.clipL, target.clipT, target.clipR + 1, target.clipB + 1}, target.base, target.pitch);
+    return 1;
+}
+
+static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels, int w, int h,
+                     const vt::PixelPlane* plane = nullptr, bool guides = false, int rowCount = 0, int rowStep = 23) {
     int pitch = (w * 3 + 3) & ~3;
     std::vector<unsigned char> bmp(54 + pitch * h, 0);
     bmp[0] = 'B'; bmp[1] = 'M';
@@ -33,11 +41,21 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
     *(int*)&bmp[18] = w; *(int*)&bmp[22] = h;
     *(unsigned short*)&bmp[26] = 1; *(unsigned short*)&bmp[28] = 24;
     for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
-        unsigned short c = pixels[y * w + x];
+        unsigned int c = plane ? plane->Composite(x, y, pixels[y * w + x]) : vt::PixelPlane::Expand565(pixels[y * w + x]);
+        if (guides && x >= 4 && ((x-4)%8)<4) for (int row=0;row<rowCount;++row) {
+            const int relative=y-(6+row*rowStep);
+            const unsigned int guide=relative==0?0xEF6666:relative==8?0x73AAFF:relative==16?0xFFCC55:0;
+            if (!guide) continue;
+            // Preview overlay only. Keep the glyph's real raster untouched.
+            unsigned int result=0;
+            for (int shift=0;shift<=16;shift+=8)
+                result|=((((c>>shift)&255)*3+((guide>>shift)&255)*2)/5)<<shift;
+            c=result;
+        }
         unsigned char* p = &bmp[54 + (h - y - 1) * pitch + x * 3];
-        p[0] = (unsigned char)((c & 31) * 255 / 31);
-        p[1] = (unsigned char)(((c >> 5) & 63) * 255 / 63);
-        p[2] = (unsigned char)(((c >> 11) & 31) * 255 / 31);
+        p[0] = (unsigned char)c;
+        p[1] = (unsigned char)(c >> 8);
+        p[2] = (unsigned char)(c >> 16);
     }
     FILE* f = fopen(path, "wb");
     if (f) { fwrite(&bmp[0], 1, bmp.size(), f); fclose(f); }
@@ -45,10 +63,15 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
 
 int main(int argc, char** argv) {
     const char* output = argc > 1 ? argv[1] : "preview.bmp";
-    bool check = argc > 2 && !strcmp(argv[2], "--check");
-    bool line = argc > 3 && !strcmp(argv[3], "--line");
-    bool scene = argc > 4 && !strcmp(argv[4], "--scene");
-    FILE* f = fopen("F:\\Mental Omega\\game.fnt", "rb");
+    bool check = false, line = false, scene = false, bgra = false, guides = false;
+    for (int i = 2; i < argc; ++i) {
+        if (!strcmp(argv[i], "--check")) check = true;
+        if (!strcmp(argv[i], "--line")) line = true;
+        if (!strcmp(argv[i], "--scene")) scene = true;
+        if (!strcmp(argv[i], "--bgra")) bgra = true;
+        if (!strcmp(argv[i], "--guides")) guides = true;
+    }
+    FILE* f = fopen(VT_GAME_DIR "/game.fnt", "rb");
     if (!f) return 2;
     fseek(f, 0, SEEK_END); long len = ftell(f); rewind(f);
     std::vector<unsigned char> data(len);
@@ -59,22 +82,6 @@ int main(int argc, char** argv) {
     fd.stride = hdr[2]; fd.lines = hdr[3]; fd.bytes = hdr[6];
     fd.symbols = (const unsigned short*)&data[28];
     fd.bitmaps = &data[28 + 131072];
-    const int w = 720, h = 320;
-    std::vector<unsigned short> pixels(w * h, 0);
-    if (scene) {
-        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
-            // Deterministic dark terrain-like RGB565 background. The bottom
-            // sample also exercises white mixed text on a flat UI grey.
-            unsigned int noise = ((unsigned int)x * 1664525u + (unsigned int)y * 1013904223u) >> 25;
-            int red = 3 + (noise & 3), green = 10 + (noise & 7), blue = 3 + (noise & 1);
-            if (y >= 270) { red = blue = 3; green = 6; }
-            pixels[y * w + x] = (unsigned short)((red << 11) | (green << 5) | blue);
-        }
-    }
-    unsigned char bf[128] = {};
-    *(void**)(bf + 4) = &fd; *(void**)(bf + 12) = &pixels[0];
-    *(int*)(bf + 16) = w;
-    *(int*)(bf + 56) = w - 1; *(int*)(bf + 60) = h - 1;
     const wchar_t* rows[] = {
         L"Phobos development build #48. Please test the build before shipping.",
         L"难度：普通",
@@ -91,10 +98,42 @@ int main(int argc, char** argv) {
         L"Mixed (中文) [MIDAS] 04:12, done. Test: 50%; OK!"
     };
     const int rowCount = sizeof(rows) / sizeof(rows[0]);
+    unsigned char bf[128] = {};
+    *(void**)(bf + 4) = &fd;
+    int w = 720;
+    const int rowStep = guides ? 40 : 23;
+    const int h = guides ? rowCount*rowStep+12 : 320;
+    // The preview canvas must contain the complete natural-width sample.
+    // Measurement does not require a locked surface; allow both side margins.
+    if (line) for (const wchar_t* row : rows) {
+        int measured = 0;
+        if (!vt::Takeover::MeasureDynamicWidth(bf, row, 0, &measured)) return 3;
+        if (measured + 8 > w) w = measured + 8;
+    }
+    std::vector<unsigned short> pixels(w * h, 0);
+    if (scene) {
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            // Deterministic dark terrain-like RGB565 background. The bottom
+            // sample also exercises white mixed text on a flat UI grey.
+            unsigned int noise = ((unsigned int)x * 1664525u + (unsigned int)y * 1013904223u) >> 25;
+            int red = 3 + (noise & 3), green = 10 + (noise & 7), blue = 3 + (noise & 1);
+            if (y >= 270) { red = blue = 3; green = 6; }
+            pixels[y * w + x] = (unsigned short)((red << 11) | (green << 5) | blue);
+        }
+    }
+    vt::PlaneOptions planeOptions;
+    planeOptions.linear = vt::Cfg::LinearBlend(); planeOptions.gamma = vt::Cfg::Gamma();
+    planeOptions.antialias = vt::Cfg::AntiAlias(); planeOptions.outline = vt::Cfg::Outline();
+    planeOptions.outlineColor = vt::Cfg::OutlineColor();
+    vt::PixelPlane plane(w, h, planeOptions);
+    if (bgra) { previewPlane = &plane; vt::SetPresentationWriter(PaintPreview); }
+    *(void**)(bf + 4) = &fd; *(void**)(bf + 12) = &pixels[0];
+    *(int*)(bf + 16) = w;
+    *(int*)(bf + 56) = w - 1; *(int*)(bf + 60) = h - 1;
     int fails = 0;
     for (int r = 0; r < rowCount; ++r) {
         *(unsigned short*)(bf + 36) = r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
-        int x = 4, y = 6 + r * 23;
+        int x = 4, y = 6 + r * rowStep;
         if (line && !vt::Takeover::BeginLine(bf, rows[r], -1, x, y, x, 0, 0, 0x43464D)) ++fails;
         for (const wchar_t* p = rows[r]; *p; ++p) {
             int oldWidth = fd.bitmaps[(fd.symbols[*p] - 1) * fd.bytes];
@@ -108,7 +147,30 @@ int main(int argc, char** argv) {
         vt::Takeover::EndLine(bf);
     }
     if (data != original) { printf("FAIL: game metrics/data changed\n"); ++fails; }
-    WriteBmp(output, pixels, w, h);
+    if (bgra) {
+        bool touchesEdge = false;
+        for (int x = 0; x < w; ++x)
+            touchesEdge |= plane.At(x, 0).a != 0 || plane.At(x, h - 1).a != 0;
+        for (int y = 0; y < h; ++y)
+            touchesEdge |= plane.At(0, y).a != 0 || plane.At(w - 1, y).a != 0;
+        if (touchesEdge) { printf("FAIL: preview ink touches canvas edge\n"); ++fails; }
+    }
+    WriteBmp(output, pixels, w, h, bgra ? &plane : nullptr, guides, rowCount, rowStep);
+    if (guides) {
+        FILE* metadata=fopen((std::string(output)+".json").c_str(),"wb");
+        if(!metadata) return 4;
+        fprintf(metadata,"{\"cellHeight\":16,\"baseline\":%d,\"rows\":[",vt::Cfg::BaselineRow());
+        for(int r=0;r<rowCount;++r) {
+            vt::Takeover::InkY ink={};
+            int measured=0;
+            if(!vt::Takeover::MeasureTextInkY(bf,rows[r],4,0,&ink) ||
+               !vt::Takeover::MeasureDynamicWidth(bf,rows[r],0,&measured)) {fclose(metadata);return 5;}
+            fprintf(metadata,"%s{\"index\":%d,\"y\":%d,\"inkTop\":%d,\"inkBottom\":%d,\"width\":%d}",
+                    r?",":"",r,6+r*rowStep,ink.top,ink.bottom,measured);
+        }
+        fprintf(metadata,"]}\n");fclose(metadata);
+    }
+    vt::SetPresentationWriter(nullptr); previewPlane = nullptr;
     // Repeat draws at different origins must preserve original font metrics.
     for (int n = 0; n < 100; ++n) {
         int x = 3 + (n % 7), y = 29;
@@ -123,12 +185,9 @@ int main(int argc, char** argv) {
     vt::GlyphSource glyphs;
     glyphs.SetAntiAlias(true); glyphs.SetSupersample(vt::Cfg::Supersample());
     glyphs.SetHinting(vt::Cfg::ConfigInt("Hinting", 0));
-    glyphs.SetClassAlign(vt::Cfg::ConfigInt("ClassAlign", 1) != 0);
-    glyphs.SetFitMode(0);
     glyphs.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
     glyphs.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSizeCJK());
     char latinFont[MAX_PATH] = {};
-#ifndef VT_BASELINE
     vt::Cfg::ConfigStr("FontFileLatin", "", latinFont, sizeof(latinFont));
     if (latinFont[0] && !glyphs.SetLatinFont(latinFont)) ++fails;
     if (glyphs.FaceHandleFor(0x2014) != glyphs.FaceHandleFor(0x4E2D) ||
@@ -136,7 +195,6 @@ int main(int argc, char** argv) {
         glyphs.FaceHandleFor('.') != glyphs.FaceHandle()) {
         printf("FAIL: mixed punctuation uses wrong face\n"); ++fails;
     }
-#endif
     const vt::GlyphCell* narrow = glyphs.Get('M', 3, 0);
     const vt::GlyphCell* wide = glyphs.Get('M', 7, 0);
     if (narrow == wide || narrow->width != 3 || wide->width != 7) ++fails;
@@ -192,7 +250,6 @@ int main(int argc, char** argv) {
                 ++fails; y = 16; break;
             }
     }
-#ifndef VT_BASELINE
     vt::SetDither(true);
     vt::SetLinearBlend(true);
     for (int y = 0; y < 4; ++y) for (int x = 0; x < 4; ++x) {
@@ -205,7 +262,6 @@ int main(int argc, char** argv) {
             if (vt::Blend(0x1234, 0x1234, cov, vt::RGB565, x, y) != 0x1234) ++fails;
         }
     }
-#endif
     printf("%s: %d failures; image %s\n", fails ? "FAIL" : "PASS", fails, output);
     return check && fails ? 1 : 0;
 }

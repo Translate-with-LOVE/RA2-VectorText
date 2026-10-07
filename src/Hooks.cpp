@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 // ===========================================================================
 //  VectorText -- text observation and per-glyph / single-line X takeover.
 //  Observation and row-boundary hooks replay original bytes. Successful Blit
@@ -45,8 +47,31 @@ namespace
         int* output;
         int measured;
         bool loading;
+        bool tooltip;
+        bool message;
+        void* font;
+        const wchar_t* text;
+        int* height;
+        vt::Takeover::InkY ink;
+        int lineHeight;
+        bool inkValid;
     };
     static __declspec(thread) DynamicMeasurement t_measurement = {};
+    struct TooltipLayout { void* font; const wchar_t* text; int top, drawHeight; };
+    static __declspec(thread) TooltipLayout t_tooltip = {};
+    struct MessageLayout { void* font; const wchar_t* text; vt::Takeover::InkY ink; bool valid; };
+    static __declspec(thread) MessageLayout t_message = {};
+    struct BackgroundMeasurement
+    {
+        DWORD entryEsp, caller;
+        int* output;
+        vt::Takeover::InkY ink;
+        int margin;
+        bool valid;
+        const wchar_t* text;
+        int anchor, align, y;
+    };
+    static __declspec(thread) BackgroundMeasurement t_background = {};
 
     void CaptureDynamicMeasurement(REGISTERS* R)
     {
@@ -55,14 +80,36 @@ namespace
         // from that slot in the successful-return hook.
         t_measurement = {};
         const DWORD caller = R->Stack32(0);
+        if (t_background.entryEsp && caller == 0x00433EE6u && R->Stack32(0x14) == 0x004A59F6u &&
+            t_background.text == (const wchar_t*)(uintptr_t)R->Stack32(4))
+            t_background.valid = vt::Takeover::MeasureTextInkY((void*)(uintptr_t)R->ECX(), t_background.text,
+                t_background.anchor, t_background.align, &t_background.ink) && t_background.ink.lines == 1;
         const bool loading = caller == 0x00553199u || caller == 0x005531EFu;
         const bool message = caller == 0x00433EE6u && R->Stack32(0x14) == 0x00623A81u;
+        if (message) t_message = {};
+        // Native tooltip measures before adding 8px horizontal padding and
+        // clamping its X against the selected surface width (0x478F2D..5A).
+        const bool tooltip = caller == 0x00478F0Bu;
+        if (tooltip) t_tooltip = {};
         int* output = (int*)(uintptr_t)R->Stack32(8);
-        if ((!loading && !message) || !RangeOk(output, sizeof(int))) return;
+        if ((!loading && !message && !tooltip) || !RangeOk(output, sizeof(int))) return;
         int measured = 0;
         if (vt::Takeover::MeasureDynamicWidth((void*)(uintptr_t)R->ECX(),
             (const wchar_t*)(uintptr_t)R->Stack32(4), (int)R->Stack32(0x10), &measured))
-            t_measurement = { R->ESP(), caller, output, measured, loading };
+        {
+            t_measurement = { R->ESP(), caller, output, measured, loading, tooltip, message,
+                (void*)(uintptr_t)R->ECX(), (const wchar_t*)(uintptr_t)R->Stack32(4) };
+            if (tooltip)
+            {
+                t_measurement.height = (int*)(uintptr_t)R->Stack32(0xC);
+                t_measurement.lineHeight = *(const int*)((const BYTE*)t_measurement.font + 0x1C);
+                t_measurement.inkValid = RangeOk(t_measurement.height, sizeof(int)) &&
+                    vt::Takeover::MeasureTextInkY(t_measurement.font, t_measurement.text, 0, 0, &t_measurement.ink);
+            }
+            else if (message)
+                t_measurement.inkValid = vt::Takeover::MeasureTextInkY(t_measurement.font, t_measurement.text, 0, 0,
+                    &t_measurement.ink) && t_measurement.ink.lines == 1;
+        }
     }
 
     // Copy at most cap-1 wide characters.  No C++ objects in here: __try is not
@@ -288,6 +335,99 @@ VT_DEFINE_HOOK(yra::Drawing_GetTextDimensions, VT_Hook_Drawing_GetTextDimensions
     arg.offset   = 0;
     arg.fromReg  = true;
     ReportText(vt::Hook_Drawing_GetTextDimensions, R, arg, 4, 4, "");
+    t_background = {};
+    if (vt::Takeover::DynamicTextWidthEnabled() && R->Stack32(0) == 0x006A9DD1u)
+    {
+        __try
+        {
+            int* output = (int*)(uintptr_t)R->ECX();
+            const int margin = (int)R->Stack32(0x14);
+            if (margin >= 0 && margin <= 32 && RangeOk(output, 16) && RangeOk(arg.ptr, sizeof(wchar_t)))
+            {
+                const int padding = margin > 2 ? margin : 2;
+                t_background = { R->ESP(), R->Stack32(0), output, {},
+                    padding + vt::Cfg::Outline(), false, arg.ptr,
+                    (int)R->Stack32(4), (int)((R->Stack32(0xC) >> 8) & 3), (int)R->Stack32(8) };
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER) { t_background = {}; vt::Takeover::NoteException(); }
+    }
+    return 0;
+}
+
+VT_DEFINE_HOOK(yra::Drawing_TextDimensionsDone, VT_Hook_Drawing_TextDimensionsDone, yra::Drawing_TextDimensionsDoneSz)
+{
+    __try
+    {
+        const BackgroundMeasurement pending = t_background;
+        if (pending.valid && pending.entryEsp == R->ESP() + 0x10 &&
+            pending.caller == R->Stack32(0x10) && pending.output == (int*)(uintptr_t)R->EBX())
+        {
+            t_background = {};
+            if (RangeOk(pending.output, 16))
+            {
+                const int oldHeight = (int)R->EDI();
+                pending.output[0] = pending.ink.left - pending.margin;
+                pending.output[2] = pending.ink.right - pending.ink.left + pending.margin * 2;
+                pending.output[1] = pending.y + pending.ink.top - pending.margin;
+                // Replayed native mov [ebx+0Ch],edi writes the final height.
+                R->edi = pending.ink.bottom - pending.ink.top + pending.margin * 2;
+                static LONG logged = 0;
+                if (InterlockedIncrement(&logged) <= 3)
+                    vt::Log::Note("BACKGROUND height: sidebar old=%d new=%d top=%d bottom=%d margin=%d",
+                        oldHeight, (int)R->EDI(), pending.ink.top, pending.ink.bottom, pending.margin);
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { t_background = {}; vt::Takeover::NoteException(); }
+    return 0;
+}
+
+// The campaign message path builds its own background rectangle rather than
+// going through tooltip or Drawing::GetTextDimensions. Only this rectangle is
+// adjusted; the message's Y, reveal loop and next row's spacing stay native.
+// Run before 623A9F: Phobos owns that slot and consumes EBP as the height for
+// its translucent fill. Both its fill and the original fill see our Y/height.
+VT_DEFINE_HOOK(yra::Message_Background, VT_Hook_Message_Background, yra::Message_BackgroundSz)
+{
+    __try
+    {
+        const MessageLayout pending = t_message;
+        t_message = {};
+        if (pending.valid && pending.text == (const wchar_t*)(uintptr_t)R->EDI() &&
+            pending.font == (void*)(uintptr_t)R->Stack32(0x104C) &&
+            RangeOk((const void*)(uintptr_t)R->ESI(), 16) && RangeOk((const void*)(uintptr_t)(R->ESP()+0x30),16))
+        {
+            const int y = *(const int*)(uintptr_t)(R->ESI()+4);
+            int margin = vt::Cfg::Outline();
+            if (margin < 1) margin = 1;
+            if (margin > 2) margin = 2;
+            // One extra pixel below joins adjacent 19px message rows without
+            // moving the text or the background's top edge.
+            const int height = pending.ink.bottom - pending.ink.top + margin*2 + 1;
+            if (y >= -32768 && y <= 32768 && height > 0 && height <= 128)
+            {
+                const int originalHeight = (int)R->EBP();
+                const int x = *(const int*)(uintptr_t)R->ESI();
+                int horizontal = vt::Cfg::ConfigInt("LineWidthPadding", 4);
+                if (horizontal < 4) horizontal = 4;
+                if (horizontal > 32) horizontal = 32;
+                const int paddingX = horizontal/2 + vt::Cfg::Outline();
+                // Replayed native instruction writes EDX to the rectangle X.
+                R->edx = x + pending.ink.left - paddingX;
+                *(int*)(uintptr_t)(R->ESP()+0x38) = pending.ink.right - pending.ink.left + horizontal + vt::Cfg::Outline()*2;
+                *(int*)(uintptr_t)(R->ESP()+0x34) = y + pending.ink.top - margin;
+                // Native fill writes EBP after two pushes; Phobos writes it
+                // directly through the rectangle pointer in EAX at 623A9F.
+                R->ebp = height;
+                static LONG logged = 0;
+                if (InterlockedIncrement(&logged) <= 4)
+                    vt::Log::Note("BACKGROUND height: message old=%d new=%d top=%d bottom=%d margin=%d",
+                        originalHeight,height,pending.ink.top,pending.ink.bottom,margin);
+            }
+        }
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER) { t_message = {}; vt::Takeover::NoteException(); }
     return 0;
 }
 
@@ -352,14 +492,36 @@ VT_DEFINE_HOOK(yra::BitFont_DimensionDone, VT_Hook_BitFont_DimensionDone, yra::B
             t_measurement = {};
             if (RangeOk(pending.output, sizeof(int)))
             {
-                // Loading DrawText still selects rows using legacy advances;
-                // do not make its box narrower than that original measurement.
+                // Loading uses one width for both layout and its visible box.
+                // Tooltip also keeps its old width minimum to preserve wrapping.
                 const int original = *pending.output;
-                if (!pending.loading || pending.measured > original) *pending.output = pending.measured;
+                if ((!pending.loading && !pending.tooltip) || pending.measured > original)
+                    *pending.output = pending.measured;
+                if (pending.message && pending.inkValid)
+                    t_message = { pending.font, pending.text, pending.ink, true };
+                if (pending.tooltip && pending.inkValid && RangeOk(pending.height, sizeof(int)))
+                {
+                    const int originalHeight = *pending.height;
+                    const int inkHeight = pending.ink.bottom - pending.ink.top;
+                    // Only explicit rows matching the engine's actual row count
+                    // can use this height. Auto-wrapped rows keep native geometry.
+                    if (pending.lineHeight >= 1 && pending.lineHeight <= 128 &&
+                        originalHeight == pending.ink.lines * pending.lineHeight &&
+                        originalHeight <= 32764 && inkHeight <= 32764)
+                    {
+                        *pending.height = inkHeight;
+                        t_tooltip = { pending.font, pending.text, pending.ink.top, originalHeight + 4 };
+                        static LONG loggedHeight = 0;
+                        if (InterlockedIncrement(&loggedHeight) <= 4)
+                            vt::Log::Note("BACKGROUND height: tooltip old=%d new=%d top=%d rows=%d padding=4",
+                                originalHeight + 4, inkHeight + 4, pending.ink.top, pending.ink.lines);
+                    }
+                }
                 static LONG logged = 0;
                 if (InterlockedIncrement(&logged) <= 8)
                     vt::Log::Note("DYNAMIC width: %s old=%d new=%d caller=0x%08X",
-                        pending.loading ? "loading" : "message", original, *pending.output, pending.caller);
+                        pending.loading ? "loading" : pending.tooltip ? "tooltip" : "message",
+                        original, *pending.output, pending.caller);
             }
         }
     }
@@ -389,6 +551,22 @@ VT_DEFINE_HOOK(yra::BitText_Print, VT_Hook_BitText_Print, yra::BitText_PrintSz)
 // ---------------------------------------------------------------------------
 VT_DEFINE_HOOK(yra::BitText_DrawText, VT_Hook_BitText_DrawText, yra::BitText_DrawTextSz)
 {
+    if (R->Stack32(0) == 0x00479041u)
+    {
+        const TooltipLayout pending = t_tooltip;
+        t_tooltip = {};
+        if (pending.font == (void*)(uintptr_t)R->Stack32(4) &&
+            pending.text == (const wchar_t*)(uintptr_t)R->Stack32(0xC) &&
+            pending.drawHeight > 0 && pending.drawHeight <= 32768 && RangeOk((void*)(uintptr_t)(R->ESP() + 0x14), 12))
+        {
+            // Native popup adds 2px above/below the measured ink. Translate
+            // the complete text block into it; native row spacing stays intact.
+            *(int*)(uintptr_t)(R->ESP() + 0x14) = (int)R->Stack32(0x14) - pending.top;
+            // DrawText uses H as a row budget, separate from the font's clip
+            // rectangle. Keep the original budget so the last row still runs.
+            *(int*)(uintptr_t)(R->ESP() + 0x1C) = pending.drawHeight;
+        }
+    }
     TextArg arg;
     arg.ptr     = (const wchar_t*)(uintptr_t)R->Stack32(0xC);
     arg.offset  = 0xC;
@@ -439,46 +617,6 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         }
     }
 
-    // Mode=aa: our antialiased pixels + the engine's glyph blanked, so the
-    // engine's own pass draws nothing and the call flow is never modified.
-    if (vt::Cfg::Mode() == vt::Cfg::Mode_AA && wch != 0)
-    {
-        bool drawn = false;
-        __try
-        {
-            drawn = vt::Takeover::DrawAA((void*)(uintptr_t)R->ECX(), wch, x, y, color, (unsigned int)R->ESP());
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            drawn = false;
-            vt::Takeover::NoteException();
-            vt::Log::Note("FALLBACK aa-exception wch=U+%04X x=%d y=%d", wch, x, y);
-        }
-        if (drawn)
-            vt::Log::Count(vt::Hook_BitFont_Blit);
-        return 0;                               // engine runs, draws nothing
-    }
-
-    // Mode=swap: hand the engine our glyph data instead of drawing ourselves.
-    // No control flow is modified, so this path cannot upset the stack.
-    if (vt::Cfg::Mode() == vt::Cfg::Mode_Swap && wch != 0)
-    {
-        bool swapped = false;
-        __try
-        {
-            swapped = vt::Takeover::SwapGlyph((void*)(uintptr_t)R->ECX(), wch);
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            swapped = false;
-            vt::Takeover::NoteException();
-            vt::Log::Note("FALLBACK swap-exception wch=U+%04X", wch);
-        }
-        if (swapped)
-            vt::Log::Count(vt::Hook_BitFont_Blit);
-        return 0;                               // the engine draws (our) glyph
-    }
-
     if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw && wch != 0)
     {
         int newX = x;
@@ -489,7 +627,8 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
             drawn = vt::Takeover::TryLineBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color,
                                             R->Stack32(0), &newX);
             if (!drawn)
-                drawn = vt::Takeover::TryBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color, &newX);
+                drawn = vt::Takeover::TryBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color, &newX,
+                                             R->Stack32(0));
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {

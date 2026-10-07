@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-FileCopyrightText: 2026 VectorText contributors
+rem SPDX-License-Identifier: GPL-3.0-only
 rem ===========================================================================
 rem  locate vcvars32.bat and export VCVARS to the CALLER's environment.
 rem  Usage (from another script, inside its setlocal):

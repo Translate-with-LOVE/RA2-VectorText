@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "GlyphSource.h"
 
@@ -32,6 +34,12 @@ namespace vt
         int clipL, clipT, clipR, clipB;   // inclusive clip rect (font bounds / surface)
     };
 
+    // Optional presentation adapter. -1 declines and keeps the native path;
+    // any nonnegative result means the glyph was retained outside RGB565.
+    using PresentationWriter = int (*)(const Target&, const GlyphCell&, int, int,
+                                       int, unsigned short, bool);
+    void SetPresentationWriter(PresentationWriter writer);
+
     // Draw one glyph cell at (x, y). Returns the number of pixels written.
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color);
@@ -43,15 +51,6 @@ namespace vt
     int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                    unsigned short color, const ColorFormat& fmt);
 
-    // Draw a whole string with per-character advances taken from `advances`
-    // (pass NULL to use each cell's own width). Returns the end pen X.
-    // `reveal` reproduces the engine's per-character fade toward white:
-    // ratio = ((9 - reveal) * 31 + 31 * i) & 0xFF, applied only for 1..8.
-    int DrawString(const Target& t, GlyphSource& src, const unsigned int* codepoints,
-                   const int* advances, int count, int x, int y, int cellLines,
-                   unsigned short color, int reveal);
-
-    unsigned short BlendTowardWhite(unsigned short color, int ratio, const ColorFormat& fmt);
     unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt,
                          int x = 0, int y = 0);
 
