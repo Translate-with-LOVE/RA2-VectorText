@@ -20,7 +20,7 @@ import sys
 
 GAME_DEFAULT = r'F:\Mental Omega\gamemd.exe'
 
-# addresses that matter for the text pipeline (see docs/text-render-internals.md)
+# addresses that matter for the text pipeline (see docs/rendering.md)
 KNOWN = {
     0x434120: 'BitFont::Blit            (draw one glyph)',
     0x434500: 'BitFont::DrawString      (string loop)',

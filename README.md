@@ -8,8 +8,7 @@
 字体缺失的图标使用 game.fnt 原位图，后面的文字继续自然排版。
 任务加载目标框和战役消息背景按自然文字宽度留余量；不修改文本或伪造字符数量。
 
-实现边界见 [单行渲染说明](docs/single-line-render.md)，画质及裁剪验证见
-[小字号画质说明](docs/small-text-quality.md)。
+配置、实现边界、hook 约定及验证方法见 [最终渲染说明](docs/rendering.md)。
 
 ## 构建与安装
 
@@ -34,7 +33,7 @@ build.bat
 - `DynamicTextWidth=1`、`LineWidthPadding=4`：动态背景框预留 4px。
 - `BaselineRow=13`、`Supersample=1`、`Hinting=0`：统一基线，在目标像素网格进行 LIGHT hinting。
 
-配置完整说明及回退方法见上述两份文档；字体文件需存在于本机。
+配置完整说明及回退方法见最终渲染说明；字体文件需存在于本机。
 不使用横向强制拉伸。过长单行先收紧空白，再最多等比缩至 90%；无法容纳时整行回退。
 
 ## 验证与诊断
@@ -57,9 +56,3 @@ build.bat
 保留的诊断工具：`tools/analyze_log.py` 汇总实际日志，`tools/find_callers.py` 扫描游戏原生调用点，
 `tools/screenshot_diff.py` 比较同一静态画面的截图。各工具支持 `--help`。
 `tools/find_vcvars.bat` 与 `third_party/build_freetype.bat` 是构建依赖。
-
-## 历史资料
-
-`docs/M1-design.md`、`docs/M2-report.md` 和相关审计文档保留早期调研与验证证据，
-其中的字号、模式、钩子数量和旧脚本命令属于当时版本，不作为当前操作入口。
-旧字体选型、分类对齐、近似度量及一次性预览脚本已删除；早期冒烟和 M0 自检由现有验证覆盖。

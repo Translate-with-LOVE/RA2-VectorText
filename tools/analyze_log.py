@@ -163,7 +163,7 @@ def main():
         out.append(s)
         print(s)
 
-    w('# VectorText M0 log analysis')
+    w('# VectorText 日志分析')
     w()
     w('log      : %s' % path)
     if proc:
@@ -237,13 +237,13 @@ def main():
         for h, caller, text, extra in garbage[:10]:
             w('* `%s` caller=0x%s text=%r  %s' % (h, caller[2:], text, extra[:100]))
 
-    # ---- M1 takeover section ------------------------------------------------
+    # ---- rendering diagnostics (retain the runtime log's existing prefix) ---
     m1 = [ln for ln in io_lines if 'M1 ' in ln or 'FALLBACK' in ln]
     w()
-    w('## M1 takeover (Mode=draw)')
+    w('## 渲染与回退统计')
     w()
     if not m1:
-        w('* none -- the run was in Mode=observe/off (M0 behaviour)')
+        w('* no rendering diagnostics recorded')
     else:
         for ln in m1[:40]:
             w('* `%s`' % ln.strip()[:180])
