@@ -10,6 +10,7 @@ if errorlevel 1 (popd & exit /b 1)
 copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
 if "%~1"=="--2x-only" goto output2
 if "%~1"=="--perf-only" goto performance
+if "%~1"=="--fractional-only" goto fractional
 for %%R in (direct3d9 opengl gdi) do (
     >ddraw.ini echo [ddraw]
     >>ddraw.ini echo renderer=%%R
@@ -42,6 +43,8 @@ call :configure2
 cnc_present_test.exe --compat-2x
 if errorlevel 1 (copy /y "%ROOT%VectorText.ini" VectorText.ini >nul & popd & exit /b 1)
 copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+call :fractional_checks
+if errorlevel 1 (popd & exit /b 1)
 for %%W in (true false) do (
     >ddraw.ini echo [ddraw]
     >>ddraw.ini echo renderer=direct3d9
@@ -78,6 +81,40 @@ copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
 popd
 exit /b %RC%
 
+:fractional
+call :fractional_checks
+set "RC=%ERRORLEVEL%"
+popd
+exit /b %RC%
+
+:fractional_checks
+for %%S in (1.25 1.5 1.75 2.25 2.5) do (
+    call :configure_fraction %%S
+    echo [*] cnc-ddraw fractional output %%S
+    cnc_present_test.exe --fractional %%S
+    if errorlevel 1 exit /b 1
+)
+call :configure_fraction 1.5
+>VectorText.ini echo [VectorText]
+>>VectorText.ini echo Enabled=true
+>>VectorText.ini echo Mode=draw
+>>VectorText.ini echo Present32=true
+>>VectorText.ini echo HiDPI=false
+cnc_present_test.exe --fractional 1.5
+set "VT_FRACTION_RC=%ERRORLEVEL%"
+copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+exit /b %VT_FRACTION_RC%
+
+:configure_fraction
+set "VT_TEST_WIDTH=960"
+set "VT_TEST_HEIGHT=720"
+if "%~1"=="1.25" (set "VT_TEST_WIDTH=800" & set "VT_TEST_HEIGHT=600")
+if "%~1"=="1.75" (set "VT_TEST_WIDTH=1120" & set "VT_TEST_HEIGHT=840")
+if "%~1"=="2.25" (set "VT_TEST_WIDTH=1440" & set "VT_TEST_HEIGHT=1080")
+if "%~1"=="2.5" (set "VT_TEST_WIDTH=1600" & set "VT_TEST_HEIGHT=1200")
+call :configure2 %VT_TEST_WIDTH% %VT_TEST_HEIGHT%
+exit /b 0
+
 :performance
 >ddraw.ini echo [ddraw]
 >>ddraw.ini echo renderer=direct3d9
@@ -97,12 +134,16 @@ popd
 exit /b %RC%
 
 :configure2
+set "VT_OUTPUT_WIDTH=1280"
+set "VT_OUTPUT_HEIGHT=960"
+if not "%~1"=="" set "VT_OUTPUT_WIDTH=%~1"
+if not "%~2"=="" set "VT_OUTPUT_HEIGHT=%~2"
 >ddraw.ini echo [ddraw]
 >>ddraw.ini echo renderer=direct3d9
 >>ddraw.ini echo windowed=true
 >>ddraw.ini echo fullscreen=false
->>ddraw.ini echo width=1280
->>ddraw.ini echo height=960
+>>ddraw.ini echo width=%VT_OUTPUT_WIDTH%
+>>ddraw.ini echo height=%VT_OUTPUT_HEIGHT%
 >>ddraw.ini echo resizable=true
 >>ddraw.ini echo savesettings=0
 >>ddraw.ini echo minfps=30

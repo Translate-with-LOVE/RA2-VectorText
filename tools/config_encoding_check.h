@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 
-// Each mode runs in a fresh process: production configuration is read once.
+// Each mode runs in a fresh process because named rendering settings are cached.
 static int CheckConfigEncoding(const char* mode)
 {
     const bool numeric = !strcmp(mode,"numeric");

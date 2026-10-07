@@ -6,18 +6,14 @@
 #include <vector>
 
 // ===========================================================================
-//  GlyphSource -- turns codepoints into glyph cells in *the engine's* format.
+//  GlyphSource -- cached glyph masks, coverage, bearings and natural advances.
 //
-//  Engine format (verified against game.fnt and BitFont::Blit):
-//      byte 0            : advance width in pixels
-//      strideBytes*lines : 1bpp rows, MSB first, 1 = ink
+//  GlyphCell is our own structure, not a serialized game.fnt record. Its 1bpp
+//  mask uses the game's MSB-first row layout; grayscale coverage and optional
+//  2x rasters serve RGB565 drawing and presentation overlays.
 //
-//  Glyphs retain monochrome masks and grayscale coverage for both native
-//  RGB565 drawing and the optional presentation adapter.
-//
-//  Two faces are kept open when the Latin and CJK pixel sizes differ (the
-//  game's own font is two sizes as well): calling FT_Set_Pixel_Sizes per glyph
-//  would flush FreeType's caches on every script switch and cost real frames.
+//  Latin and CJK keep separate faces when their size or font differs, avoiding
+//  FT_Set_Pixel_Sizes calls on each script switch.
 // ===========================================================================
 
 namespace vt
@@ -29,9 +25,9 @@ namespace vt
     };
     struct GlyphCell
     {
-        unsigned char width;                 // engine advance (pixels)
+        unsigned char width;                 // integer compatibility advance (pixels)
         unsigned char bits[3 * 32];          // strideBytes * lines, <= 96 bytes
-        unsigned char cov[24 * 32];          // 8-bit coverage (only filled in AA mode)
+        unsigned char cov[24 * 32];          // 8-bit coverage; mono mode also fills it with sampled 0/255 ink
         int inkX;                            // natural glyph bearing, in pixels
         int inkY, inkRows;                    // natural vertical bearing/height; 0 rows = legacy cell
         int advanceQ, inkLeftQ, inkRightQ;   // quarter-pixel natural metrics
@@ -44,20 +40,18 @@ namespace vt
         GlyphSource();
         ~GlyphSource();
 
-        // strideBytes/lines must match the game's font (game.fnt: 3 / 16).
-        // baselineRow is the row inside the cell that sits on the text baseline;
-        // the engine's own 'A' occupies rows 4..12 of a 16 row cell, which puts
-        // the baseline at row 13.
+        // Logical stride/line count match the native font (game.fnt: 3 / 16).
+        // baselineRow is the baseline offset from the engine's text Y. Actual
+        // raster bearings may place ink above or below that logical cell.
         bool Init(const char* ttfPath, int pixelSize, int weight,
                   int strideBytes = 3, int lines = 16, int baselineRow = 13);
         void Shutdown();
 
-        // The game's own font is not one size: Latin ink is ~9 rows tall while
-        // CJK fills the whole 16-row cell.  Matching that needs two sizes.
-        // cjkFrom defaults to U+2E80 (CJK radicals supplement).
+        // Configure Latin and CJK pixel sizes independently. Codepoints at or
+        // above cjkFrom use the CJK face; default U+2E80 is CJK radicals supplement.
         void SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom = 0x2E80);
         // Optional Latin face chosen for the game's narrow ASCII advances.
-        // The CJK face stays on FontFile; no character proportions are changed.
+        // The CJK face stays on FontFile; fitting is controlled separately.
         bool SetLatinFont(const char* path);
         void SetLegacyCodepage1252(bool on);
         unsigned int RenderCodepoint(unsigned int cp) const;
@@ -66,12 +60,13 @@ namespace vt
         // line rendering passes -1 and retains the font's horizontal metrics.
         void SetFitToAdvance(bool on) { m_fit = on; }
 
-        // AA mode also fills GlyphCell::cov with 8-bit coverage, which lets the
-        // pixel writer blend into the game's 16-bit surfaces.
+        // Select grayscale or monochrome FreeType rasterization. Both populate
+        // coverage and a thresholded 1bpp mask for the pixel writers.
         void SetAntiAlias(bool on);
 
-        // FreeType's stem darkening: thickens stems during rendering, which is
-        // the intended cure for antialiased text looking too light at small sizes.
+        // A positive value enables autofitter no-stem-darkening=false at Init.
+        // This is a Boolean request, not a numeric stroke-width adjustment;
+        // its effect depends on the font/driver and selected load flags.
         void SetStemDarkening(int amount) { m_darkening = amount; }
 
         // Supersampling factor (1 = target-size AA, 2/4 = box-downsample).
@@ -80,7 +75,8 @@ namespace vt
         void SetSupersample(int ss);
 
         // Grayscale grid fitting: 0=light (vertical), 1=normal, 2=unhinted.
-        // With Supersample=1, hinting works on the actual destination grid.
+        // With Supersample=1, the logical raster is hinted on its 1x grid;
+        // the optional high-resolution face is hinted separately at 2x.
         void SetHinting(int mode);
         void SetHighResolution(bool on);
 
@@ -91,8 +87,9 @@ namespace vt
             return (UsesCJKFace(RenderCodepoint(codepoint)) && m_faceB) ? m_faceB : m_faceA;
         }
 
-        // gameAdvance: the advance taken from the game's font (Metrics=game).
-        // Pass -1 to use the vector font's own advance (Metrics=freetype).
+        // gameAdvance: explicit integer compatibility advance (native or scaled).
+        // Pass -1 for the vector font's natural advance (Metrics=vector or row
+        // rendering). scale1024 uniformly scales a row raster, in 1/1024 units.
         // Returns NULL if the codepoint has no glyph.
         // phase = signed horizontal subpixel shift in quarter pixels (-3..3); it is
         // baked into the rasterised coverage, so the engine can keep drawing at
@@ -113,7 +110,7 @@ namespace vt
 
         void* m_lib;                          // FT_Library
         void* m_faceA;                        // Latin / default size
-        void* m_faceB;                        // CJK size (NULL when identical)
+        void* m_faceB;                        // CJK face (NULL when font and size match Latin)
         int   m_sizeLatin;
         int   m_sizeCJK;
         unsigned int m_cjkFrom;

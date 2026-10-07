@@ -11,10 +11,20 @@ project(VectorText LANGUAGES C CXX)
 if(NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
     message(FATAL_ERROR "VectorText requires the MSVC x86 toolchain (vcvars32.bat).")
 endif()
+if(MSVC_VERSION LESS 1929 OR MSVC_VERSION GREATER_EQUAL 1950)
+    message(FATAL_ERROR "Windows 7 requires MSVC 14.29 or 14.3x/14.4x; VS 2026's 14.50+ runtime is unsupported. Use tools/cmake_build.bat with a compatible installed toolset.")
+endif()
 include(cmake/msvc_utf8_dependencies.cmake)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+add_compile_definitions(WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+    WINVER=0x0601 _WIN32_WINNT=0x0601 NTDDI_VERSION=0x06010000)
+
+foreach(dependency freetype minhook)
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/${dependency}/include")
+        message(FATAL_ERROR "Missing ${dependency} submodule. Run git submodule update --init --recursive.")
+    endif()
+endforeach()
 
 # Keep the existing minimal, static FreeType module set; no external packages.
 set(ft "${CMAKE_CURRENT_SOURCE_DIR}/third_party/freetype")
@@ -31,6 +41,7 @@ target_compile_options(vt_freetype PRIVATE /W3 /wd4819)
 add_library(vt_minhook STATIC
     third_party/minhook/src/buffer.c third_party/minhook/src/hook.c
     third_party/minhook/src/trampoline.c third_party/minhook/src/hde/hde32.c)
+target_include_directories(vt_minhook PUBLIC third_party/minhook/include)
 target_compile_options(vt_minhook PRIVATE /W3)
 
 # This core is shared by the DLL and offline tests. Presentation callbacks are
@@ -39,18 +50,29 @@ add_library(vt_glyphs STATIC src/GlyphSource.cpp src/PixelWriter.cpp)
 target_include_directories(vt_glyphs PUBLIC src include)
 target_link_libraries(vt_glyphs PUBLIC vt_freetype)
 target_compile_options(vt_glyphs PRIVATE /W4)
-add_library(vt_takeover STATIC src/Takeover.cpp src/Logger.cpp)
+add_library(vt_takeover STATIC
+    src/Takeover.cpp src/takeover/LineLayout.cpp src/takeover/Measurement.cpp
+    src/takeover/Diagnostics.cpp src/Config.cpp src/Logger.cpp)
 target_link_libraries(vt_takeover PUBLIC vt_glyphs)
 target_compile_options(vt_takeover PRIVATE /W4)
 add_library(vt_plane STATIC src/PixelPlane.cpp)
 target_link_libraries(vt_plane PUBLIC vt_glyphs)
 target_compile_options(vt_plane PRIVATE /W4)
 
-add_library(VectorText SHARED src/Hooks.cpp src/DllMain.cpp src/Presentation32.cpp)
+# Public entry points stay in the top-level files; private modules own their
+# state and algorithms. The display test compiles the same presentation sources.
+set(VT_HOOK_SOURCES
+    src/Hooks.cpp src/hooks/Observation.cpp src/hooks/Metrics.cpp
+    src/hooks/Background.cpp src/hooks/Text.cpp)
+set(VT_PRESENTATION_SOURCES
+    src/Presentation32.cpp src/presentation/State.cpp src/presentation/Surfaces.cpp
+    src/presentation/Gdi.cpp src/presentation/D3d9.cpp src/presentation/OpenGL.cpp
+    src/presentation/Atlas.cpp)
+add_library(VectorText SHARED src/DllMain.cpp ${VT_HOOK_SOURCES} ${VT_PRESENTATION_SOURCES})
 target_compile_definitions(VectorText PRIVATE SYR_VER=2)
 target_compile_options(VectorText PRIVATE /W4)
 target_link_libraries(VectorText PRIVATE vt_takeover vt_plane vt_minhook)
-target_link_options(VectorText PRIVATE /SUBSYSTEM:WINDOWS /MACHINE:X86 /INCREMENTAL:NO)
+target_link_options(VectorText PRIVATE /SUBSYSTEM:WINDOWS,6.01 /OSVERSION:6.1 /MACHINE:X86 /INCREMENTAL:NO)
 set_target_properties(VectorText PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
     set_target_properties(VectorText PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${config} "${CMAKE_BINARY_DIR}/bin")
@@ -94,7 +116,7 @@ if(BUILD_TESTING)
         target_compile_options(${target} PRIVATE /W4)
         target_compile_definitions(${target} PRIVATE VT_GAME_DIR="${VT_GAME_DIR}")
         target_include_directories(${target} PRIVATE src include)
-        target_link_options(${target} PRIVATE /SUBSYSTEM:CONSOLE /MACHINE:X86)
+        target_link_options(${target} PRIVATE /SUBSYSTEM:CONSOLE,6.01 /OSVERSION:6.1 /MACHINE:X86)
         set(out "${CMAKE_CURRENT_SOURCE_DIR}/build/${directory}")
         file(MAKE_DIRECTORY "${out}")
         set_target_properties(${target} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${out}")
@@ -115,7 +137,8 @@ if(BUILD_TESTING)
     add_dependencies(hooktest_draw VectorText)
     vt_test_executable(present32_test present32-test tools/present32_test.cpp)
     target_link_libraries(present32_test PRIVATE vt_plane)
-    vt_test_executable(cnc_present_test cnc-test tools/cnc_present_test.cpp src/Presentation32.cpp)
+    vt_test_executable(cnc_present_test cnc-test tools/cnc_present_test.cpp
+        ${VT_PRESENTATION_SOURCES} src/presentation/TestAccess.cpp)
     target_compile_definitions(cnc_present_test PRIVATE VT_PRESENT_TEST)
     target_link_libraries(cnc_present_test PRIVATE vt_takeover vt_plane vt_minhook user32 gdi32)
 
@@ -146,7 +169,9 @@ if(BUILD_TESTING)
     vt_check(quality_guides render_quality bgra-guides.bmp --check --line --bgra --guides)
     vt_check(quality_loading_2x render_quality loading-2x.bmp --check --line --bgra --loading --hidpi)
     vt_check(cpu_loading_text cnc_present_test --cpu-text)
+    vt_check(fractional_overlay cnc_present_test --fractional-offline)
     # These checks need an interactive desktop; the offline preset excludes them.
-    add_test(NAME cnc_display COMMAND cmd /c "${CMAKE_CURRENT_SOURCE_DIR}/cnc_present_test.bat")
-    set_tests_properties(cnc_display PROPERTIES LABELS display RUN_SERIAL TRUE)
+    add_test(NAME cnc_display COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cnc_present_test.bat")
+    set_tests_properties(cnc_display PROPERTIES LABELS display RUN_SERIAL TRUE
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

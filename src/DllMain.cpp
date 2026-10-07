@@ -47,8 +47,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*reserved*/)
         break;
 
     case DLL_PROCESS_DETACH:
-        // Best effort: the periodic flush already wrote the statistics; this
-        // only adds the final table (and does nothing if the process died).
+        // Best effort: periodic summaries contain hook counts and observed text.
+        // Shutdown adds final counts and takeover diagnostics; abrupt process
+        // termination may bypass this detach path entirely.
         vt::Log::Shutdown();
         break;
 

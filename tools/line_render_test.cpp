@@ -393,7 +393,7 @@ int main(int argc, char** argv)
     Clear(); vt::Takeover::BeginLine(font, text, -1, -10, 12, -10, 0, 0, Caller); Draw(text, -10, 12);
     CHECK(Lit() > 0, "negative origin clips safely at surface left edge");
 
-    // Exercise all new DLL hook adapters with Syringe's actual register ABI.
+    // Exercise the DLL hook adapters using Syringe's register-block layout.
     HMODULE dll = LoadLibraryA("VectorText.dll");
     CHECK(dll != NULL, "installed DLL loads");
     CHECK(GetModuleHandleA("Phobos.dll") == NULL && GetModuleHandleA("Ares.dll") == NULL,

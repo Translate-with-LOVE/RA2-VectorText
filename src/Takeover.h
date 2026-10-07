@@ -16,9 +16,9 @@
 //  Without a valid line plan, the existing per-glyph rendering is the fallback:
 //    * BitFont::Lock has already run, so the locked 16-bit surface and its
 //      pitch are simply read from the BitFont object (no Surface guesswork);
-//    * the function's return value is the next pen X, so we return
-//      X + <original advance>; a line plan also retains the engine's +0x2C
-//      tracking so its string loop and wrapping remain internally consistent.
+//    * the return value is the next pen X: the per-glyph fallback uses its
+//      configured integer advance, while a row plan preserves native advances.
+//      Both paths add the native constant tracking value at BitFont+0x2C.
 //  Glyph coverage is written through the native or presentation pixel writer.
 // ===========================================================================
 
@@ -37,8 +37,8 @@ namespace vt
                      unsigned int caller = 0);
 
         // Prepare exactly the line selected by the engine. count=-1 reads a
-        // bounded NUL-terminated DrawString; otherwise count is an exclusive
-        // UTF-16 range selected by DrawText. gameX is its legacy pen origin.
+        // bounded NUL-terminated DrawString; otherwise count is the number of
+        // UTF-16 units in the engine-selected row. gameX is its legacy origin.
         // boxX/width/align describe the rich path's left/centre/right anchor.
         bool BeginLine(void* bitFont, const wchar_t* text, int count, int gameX,
                        int y, int boxX, int width, int align, unsigned int blitCaller, int scale1024 = 1024);
@@ -61,9 +61,9 @@ namespace vt
         struct LineInfo { int count, widthQ, originQ, consumed, boxWidth, mixedAddedQ, tightenedQ, scale1024; };
         bool GetLineInfo(LineInfo* info);
 
-        // Read-only field dump, logged once per distinct BitFont object.  Runs
-        // in observe mode too, so a single safe run proves (or disproves) the
-        // runtime layout the takeover relies on before draw mode is enabled.
+        // Read-only field dump, once for each of the first eight distinct BitFont
+        // addresses. Observe mode can inspect these fields before drawing;
+        // the dump is evidence for those objects, not a proof of every caller.
         void Probe(void* bitFont, unsigned int ch, int x, int y, int colorArg);
 
         // Why glyphs were handed back to the engine, as a short summary string.
@@ -72,10 +72,9 @@ namespace vt
         // Called by the hook when its SEH guard caught something.
         void NoteException();
 
-        // Diagnostics: which step the takeover reached (the FINAL log line
-        // reports it, so even a hard crash tells us how far we got), and
-        // whether the direction flag was set on entry (CRT string routines
-        // assume DF=0 and would otherwise write memory backwards).
+        // In-memory takeover stage and whether DF was set at hook entry.
+        // CRT string routines require DF=0. Shutdown reports this state, but
+        // a hard crash may bypass shutdown and leave no final summary.
         const char* StageName();
         void SetStage(int stage);
         void NoteDirectionFlag();
@@ -83,8 +82,8 @@ namespace vt
         // The stack fix-up used instead of R->ESP (which Syringe drops).
         void* SkipTrampoline();
 
-        // One-line diagnostic state, reported in the FINAL log summary so that
-        // even a hard crash tells us how far the takeover got.
+        // Format the current diagnostic state for the shutdown summary.
+        // Already-written PROBE/REFUSE/SKIP records may help if shutdown fails.
         void DiagLine(char* out, int cch);
 
         // Logs the first few skip-the-callee operations in full.

@@ -3,11 +3,12 @@
 #pragma once
 
 // ===========================================================================
-//  gamemd.exe 1.001 (Yuri's Revenge, "UC" build) -- addresses used by M0
+//  gamemd.exe 1.001 (Yuri's Revenge) -- native text hook addresses
 //
-//  Every entry below was verified by disassembling the local gamemd.exe
-//  (see game.fnt-加载机制研究.md in the game root).  Expected executable
-//  identity as reported by Syringe:
+//  Addresses and overwritten instruction spans are verified against the local
+//  executable. See docs/rendering.md for the rendering paths and
+//  tools/verify_dll.py for native instruction and hook-span checks. Expected identity
+//  as reported by Syringe:
 //      size = 0x00497FE0   timestamp = 0x3BDF544E   CRC = 0x1B499086
 //
 //  `hookSize` is the number of bytes Syringe saves/restores: it must be >= 5
@@ -31,17 +32,22 @@ namespace yra
     // Drawing::GetTextDimensions  (__fastcall)
     //     ECX = RectangleStruct* pOutBuffer
     //     EDX = const wchar_t*   pText
-    //     [esp+4..] = Point2D location, WORD flags, int marginX, int marginY
+    //     [esp+4] = location.X  [esp+8] = location.Y
+    //     [esp+0xC] = flags (WORD in a DWORD stack slot)
+    //     [esp+0x10] = marginX  [esp+0x14] = marginY
     // prologue: 53 55 56 57              push ebx/ebp/esi/edi          (4 bytes)
     //           8B 3D D0 C4 89 00        mov edi,[0089C4D0]           (6) -> 10
     constexpr unsigned int Drawing_GetTextDimensions    = 0x004A59E0u;
     constexpr unsigned int Drawing_GetTextDimensionsSz  = 10;
-    // Final rectangle height write, followed by pop edi / pop esi.
+    // Final height: mov [ebx+0Ch],edi / pop edi / pop esi (3+1+1).
+    // EBX = output RectangleStruct; EDI = height before replay.
     constexpr unsigned int Drawing_TextDimensionsDone   = 0x004A5A40u;
     constexpr unsigned int Drawing_TextDimensionsDoneSz = 5;
-    // Message row background: mov edx,[ecx] / push 0 / push eax (2+2+1).
-    // Stack +30h is its rectangle, EBP is the height written after pushes.
-    // Complete rectangle setup before Phobos' optional fill hook at 623A9F.
+    // Message rectangle setup: mov [esp+30h],edx / lea eax,[esp+30h] (4+4).
+    // RectangleStruct at entry ESP+30h is X/Y/W/H; replay writes X from EDX.
+    // EBP supplies height at 623AA4 after two pushes. Phobos may replace that
+    // fill path at 623A9F, so this earlier hook prepares both native and Phobos
+    // fills without overlapping Phobos' hook span.
     constexpr unsigned int Message_Background           = 0x00623A97u;
     constexpr unsigned int Message_BackgroundSz         = 8;
 
@@ -56,14 +62,18 @@ namespace yra
     constexpr unsigned int BitFont_GetTextDimension     = 0x00433CF0u;
     constexpr unsigned int BitFont_GetTextDimensionSz   = 6;
     // Successful measurement epilogue: mov al,1 / pop ebx / add esp,1Ch.
-    // All original outputs are written; ESP+20h is the original entry stack.
+    // Original outputs are already written; entry ESP = current ESP+20h.
+    // The return address is at [esp+20h], before replay pops EBX and locals.
     constexpr unsigned int BitFont_DimensionDone         = 0x00433E7Fu;
     constexpr unsigned int BitFont_DimensionDoneSz       = 6;
 
     // --- text drawing --------------------------------------------------------
     //
-    // Drawing::PrintUnicode  (__cdecl-ish, args on stack; the string lives in
-    // one of the first stack arguments -- M0 logs the candidates)
+    // Drawing::PrintUnicode (__cdecl, formatted wide text)
+    //     [esp+4] = Point2D* output  [esp+8] = const wchar_t* format
+    //     [esp+0xC] = Surface*; remaining fixed arguments precede varargs.
+    // The hook observes the format string; it does not replace formatting.
+    // Drawing_LineBox below is in its downstream helper at 4A5EB0.
     // prologue: 8B 44 24 08              mov eax,[esp+8]               (4)
     //           81 EC 0C 04 00 00        sub esp,0x40C                 (6) -> 10
     constexpr unsigned int Drawing_PrintUnicode         = 0x004A61C0u;
@@ -90,7 +100,8 @@ namespace yra
     // BitFont::Blit  (__thiscall)  -- hottest path: once per glyph
     //     ECX = BitFont* this
     //     [esp+4] = wchar_t wch  [esp+8] = int X  [esp+0xC] = int Y  [esp+0x10] = int nColor
-    // prologue: 83 EC 30 / 53 / 55 / 56 / 57                           (7) -> 5
+    // overwritten prefix: sub esp,30h / push ebx / push ebp (3+1+1).
+    // push esi / push edi follow at 434125; they are outside this hook span.
     constexpr unsigned int BitFont_Blit                 = 0x00434120u;
     constexpr unsigned int BitFont_BlitSz               = 5;
 
@@ -107,8 +118,9 @@ namespace yra
     // Unlock entry: push esi / mov esi,ecx / mov ecx,[esp+8] (1+2+4).
     constexpr unsigned int BitFont_Unlock               = 0x00434990u;
     constexpr unsigned int BitFont_UnlockSz             = 7;
-    // PrintUnicode's final Print call: mov ecx,[0089C4B8] (6 bytes).
-    // EDI=viewport RectangleStruct; ESI=legacy X; EBP=Y; EBX=font.
+    // Drawing helper at 4A5EB0, before its BitText::Print call at 4A5FED:
+    // mov ecx,[0089C4B8] (6 bytes). This is not inside PrintUnicode at 4A61C0.
+    // EDI=viewport RectangleStruct*; ESI=legacy X; EBP=Y; EBX=BitFont*.
     constexpr unsigned int Drawing_LineBox              = 0x004A5FD6u;
     constexpr unsigned int Drawing_LineBoxSz            = 6;
 }

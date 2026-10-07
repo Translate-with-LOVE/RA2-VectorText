@@ -71,7 +71,8 @@ namespace vt
                            uint32_t* output, int outputPitch, PixelRect rect) const;
         static uint32_t Expand565(unsigned short color);
         void BackgroundRect(const unsigned short* source,int sourcePitch,uint32_t* output,int outputPitch,PixelRect rect) const;
-        std::vector<PixelRect> TextTiles() const;
+        // Include neighboring cells touched by the bilinear filter footprint.
+        std::vector<PixelRect> TextTiles(bool filtered = false) const;
         void Overlay2Rect(uint32_t* output,int outputPitch,PixelRect rect) const;
         struct NativeSample { int x, y; unsigned short base; unsigned int generation; };
         std::vector<NativeSample> CaptureNative(const unsigned short* base, int pitch,

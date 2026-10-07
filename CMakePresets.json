@@ -4,7 +4,7 @@
   "configurePresets": [
     {
       "name": "x86-release",
-      "displayName": "MSVC x86 Release (static CRT)",
+      "displayName": "Windows 7 / MSVC x86 Release (static CRT)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/cmake",
       "environment": { "VSLANG": "1033" },

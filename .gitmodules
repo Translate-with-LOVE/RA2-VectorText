@@ -2,3 +2,6 @@
 	path = third_party/freetype
 	url = https://github.com/freetype/freetype.git
 	shallow = true
+[submodule "third_party/minhook"]
+	path = third_party/minhook
+	url = https://github.com/TsudaKageyu/minhook.git

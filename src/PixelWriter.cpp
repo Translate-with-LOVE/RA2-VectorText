@@ -77,14 +77,12 @@ namespace vt
     }
 
     // ---------------------------------------------------------------------
-    //  32-bit compositing path
+    //  RGB565 fallback blending with wider integer intermediates
     //
-    //  The game's surface is 16-bit (5/6/5), so blending straight into it
-    //  quantises every partial pixel and the rounding error shows up as
-    //  banding on large antialiased areas.  Here the blend is computed in a
-    //  32-bit linear-light domain with a 12-bit fixed point table, and only the
-    //  final value is quantised - with an ordered (Bayer) offset that turns the
-    //  remaining quantisation into a fine dither instead of a hard step.
+    //  When enabled, LinearBlend uses a 12-bit linear-light lookup table;
+    //  otherwise the blend stays in encoded colour space. The final value is
+    //  quantized to 5/6/5, optionally with an ordered Bayer offset. These options
+    //  reduce colour quantization artifacts; they do not change surface format.
     // ---------------------------------------------------------------------
     static bool g_linearBlend = false;
     static bool g_dither = false;
@@ -115,7 +113,7 @@ namespace vt
     void SetLinearBlend(bool on) { BuildLuts(); g_linearBlend = on; }
     void SetDither(bool on)      { g_dither = on; }
 
-    static int  g_outline = 0;          // 0 = off, 1 = one-pixel ring
+    static int  g_outline = 0;          // 0 = off; either positive setting enables the fixed 3x3 pass
     static unsigned short g_outlineColor = 0x0000;
 
     void SetOutline(int pixels, unsigned short color)
@@ -229,9 +227,9 @@ namespace vt
                 if (g_covLutReady && g_gamma != 1.0)
                     cov = g_covLut[cov];
 
-                // outline (SDF-style dilation): the ring is the dilated coverage
-                // minus the glyph coverage, painted before the glyph itself, so
-                // small text stays readable on busy backgrounds
+                // Fixed 3x3 max-coverage pass at nonzero glyph pixels. Blend the
+                // difference before the glyph; this does not paint an outer
+                // stroke into zero-coverage pixels or use a distance field.
                 if (g_outline)
                 {
                     int dil = cov;

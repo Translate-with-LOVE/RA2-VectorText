@@ -11,6 +11,9 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <cstdlib>
 
 static HWND window;
 static void Pump(DWORD duration) {
@@ -100,8 +103,76 @@ static void Check(bool ok,const char* message) {
     FILE* report=fopen("cnc-qa.txt","a");
     if(report) { fprintf(report,"%s: %s\n",ok?"PASS":"FAIL",message);fclose(report); }
 }
+static double SampleChannel(const std::vector<unsigned int>& pixels,int width,int height,
+                            double x,double y,int channel,bool point) {
+    auto at=[&](int px,int py) {
+        if(px<0 || py<0 || px>=width || py>=height) return 0.0;
+        return (double)((pixels[(size_t)py*width+px]>>(channel*8))&255);
+    };
+    if(point) return at((int)floor(x+0.5),(int)floor(y+0.5));
+    const int l=(int)floor(x),top=(int)floor(y);
+    const double fx=x-l,fy=y-top;
+    return (at(l,top)*(1-fx)+at(l+1,top)*fx)*(1-fy)+
+        (at(l,top+1)*(1-fx)+at(l+1,top+1)*fx)*fy;
+}
+static double AtlasSample(const vt::Presentation32::TestOverlay& frame,int x,int y,int channel) {
+    const auto& v=frame.vertices;
+    for(size_t i=0;i<v.size();i+=24) {
+        // Each six-vertex rectangle has a top-left, top-right and bottom-left.
+        if(x<v[i] || x>=v[i+4] || y<v[i+1] || y>=v[i+9]) continue;
+        const double u=v[i+2]+(x-v[i])/(v[i+4]-v[i])*(v[i+6]-v[i+2]);
+        const double z=v[i+3]+(y-v[i+1])/(v[i+9]-v[i+1])*(v[i+11]-v[i+3]);
+        return SampleChannel(frame.pixels,frame.width,frame.height,
+            u*frame.width-0.5,z*frame.height-0.5,channel,frame.point);
+    }
+    return 0;
+}
 int main(int argc,char** argv) {
     FILE* report=fopen("cnc-qa.txt","w");if(report)fclose(report);
+    if(argc>1 && !strcmp(argv[1],"--fractional-offline")) {
+        // Compare the actual packed atlas and output vertices against an
+        // independent contiguous source image, including tile seams and tails.
+        vt::PlaneOptions options;options.highResolution=true;
+        vt::PixelPlane plane(96,48,options);
+        vt::GlyphRaster2 raster;raster.width=2;raster.rows=2;raster.coverage={16,80,160,240};
+        vt::GlyphCell glyph{};glyph.inkRows=1;glyph.cov[0]=128;glyph.raster2=&raster;
+        for(const auto& p:std::vector<std::array<int,3>>{{0,0,0xFFFF},{31,15,0xF800},
+                {32,16,0x07E0},{63,31,0x001F},{64,32,0xFFFF},{95,47,0xFFFF},{48,23,0x07E0}})
+            plane.Paint(glyph,p[0],p[1],1,(unsigned short)p[2],{0,0,96,48});
+        std::vector<unsigned int> full(192*96);
+        plane.Overlay2Rect(full.data(),192,{0,0,96,48});
+        for(float scale:{1.01f,1.25f,4.0f/3,1.5f,1.75f,2.0f,2.25f,2.5f,3.0f}) {
+            for(int cropped=0;cropped<2;++cropped) {
+                const vt::PixelRect source=cropped ? vt::PixelRect{9,4,87,44} : vt::PixelRect{0,0,96,48};
+                const float ox=cropped ? 37.25f : 0,oy=cropped ? 11.75f : 0;
+                vt::Presentation32::TestOverlay frame;
+                bool match=vt::Presentation32::TestBuildOverlay(plane,scale,scale,ox,oy,frame,&source);
+                double largestError=0;
+                for(int y=(int)ceil(oy-0.5);y<oy+(source.bottom-source.top)*scale-0.5;++y)
+                    for(int x=(int)ceil(ox-0.5);x<ox+(source.right-source.left)*scale-0.5;++x)
+                        for(int channel=0;channel<4;++channel) {
+                            const double expected=SampleChannel(full,192,96,
+                                source.left*2+(x-ox+0.5)*2/scale-0.5,
+                                source.top*2+(y-oy+0.5)*2/scale-0.5,channel,frame.point);
+                            const double actual=AtlasSample(frame,x,y,channel);
+                            largestError=std::max(largestError,fabs(expected-actual));
+                        }
+                match=match && largestError<0.01;
+                printf("fractional scale=%.4g cropped=%d max channel error=%.6f\n",scale,cropped,largestError);
+                Check(match,"packed atlas matches full-image sampling across tile seams and viewport offsets");
+                Check(frame.point==(scale==2.0f),"only exact 2x uses independent point samples");
+            }
+        }
+        vt::Presentation32::TestOverlay frame;
+        Check(!vt::Presentation32::TestBuildOverlay(plane,1,1,0,0,frame),"native 1x retains the existing compositor");
+        Check(!vt::Presentation32::TestBuildOverlay(plane,1.5f,1.25f,0,0,frame),"nonuniform stretch retains existing fallback");
+        Check(!vt::Presentation32::TestBuildOverlay(plane,std::numeric_limits<float>::infinity(),1.5f,0,0,frame),
+            "nonfinite quad cannot allocate an overlay");
+        plane.Clear({0,0,96,48});
+        Check(vt::Presentation32::TestBuildOverlay(plane,1.5f,1.5f,0,0,frame) && frame.vertices.empty(),
+            "erased text has no live draw cells or filter fringes");
+        printf("fractional overlay: %s\n",errors?"FAIL":"PASS");return errors?1:0;
+    }
     if(argc>1 && !strcmp(argv[1],"--cpu-text")) {
         // Offline loading-surface regression: no window, GPU, cnc-ddraw or
         // Phobos is needed. Use the real registration/writer/erasure helpers.
@@ -164,10 +235,12 @@ int main(int argc,char** argv) {
         printf("CPU text: %s\n",errors?"FAIL":"PASS");return errors?1:0;
     }
     const bool perf2=argc>1 && !strcmp(argv[1],"--perf-2x");
+    const bool fractional=argc>2 && !strcmp(argv[1],"--fractional");
+    const float requestedScale=fractional ? (float)atof(argv[2]) : 1;
     const bool compat2=argc>1 && !strcmp(argv[1],"--compat-2x");
     const bool output2=argc>1 && (!strcmp(argv[1],"--2x") || compat2 || perf2);
     const bool fullscreen=argc>1 && !strcmp(argv[1],"--fullscreen");
-    if(fullscreen || perf2) SetProcessDPIAware();
+    if(fullscreen || perf2 || fractional) SetProcessDPIAware();
     const int logicalW=fullscreen ? GetSystemMetrics(SM_CXSCREEN) : perf2 ? 1920 : 640;
     const int logicalH=fullscreen ? GetSystemMetrics(SM_CYSCREEN) : perf2 ? 1080 : 480;
     if(perf2) {
@@ -195,8 +268,11 @@ int main(int argc,char** argv) {
     }
     WNDCLASSA wc{}; wc.lpfnWndProc=DefWindowProcA; wc.hInstance=GetModuleHandle(nullptr); wc.lpszClassName="VT32Test";
     RegisterClassA(&wc);
+    RECT desired{0,0,(LONG)(640*requestedScale),(LONG)(480*requestedScale)};
+    AdjustWindowRect(&desired,WS_OVERLAPPEDWINDOW,FALSE);
     window=CreateWindowA(wc.lpszClassName,"VectorText presentation verification",WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,CW_USEDEFAULT,output2?1296:656,output2?999:519,nullptr,nullptr,wc.hInstance,nullptr);
+        CW_USEDEFAULT,CW_USEDEFAULT,fractional ? desired.right-desired.left : output2?1296:656,
+        fractional ? desired.bottom-desired.top : output2?999:519,nullptr,nullptr,wc.hInstance,nullptr);
     ShowWindow(window,SW_SHOWNOACTIVATE);
     HMODULE module=LoadLibraryA("ddraw.dll");
     if(!module) return 2;
@@ -219,6 +295,60 @@ int main(int argc,char** argv) {
     printf("backend=%ld frames=%ld surfaces=%ld\n",stats.backend,stats.frames,stats.surfaces);
     const bool expectFallback=argc>1 && !strcmp(argv[1],"--fallback");
     Check(expectFallback ? !stats.backend : stats.backend>0,"presentation activation");
+    if(fractional) {
+        vt::GlyphRaster2 hi;hi.width=32;hi.rows=32;hi.coverage.assign(1024,192);
+        vt::GlyphCell mark{};mark.inkRows=16;mark.raster2=&hi;
+        for(int y=0;y<16;++y) for(int x=0;x<16;++x) mark.cov[y*24+x]=128;
+        DDSURFACEDESC d{};d.dwSize=sizeof(d);primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
+        vt::Target t{(unsigned short*)d.lpSurface,d.lPitch/2,0,0,639,479};
+        vt::DrawCellAA(t,mark,25,10,16,0xFFFF,vt::RGB565);primary->Unlock(nullptr);Pump(500);
+        primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(300);
+        const bool enabled=vt::Cfg::HiDPI();
+        const float actualScale=vt::Presentation32::TestObservedScale();
+        printf("requested fractional scale %.4g, observed %.4g\n",requestedScale,actualScale);
+        Check(enabled ? fabs(actualScale-requestedScale)<0.001f : actualScale==0,
+            "fractional scale follows actual cnc-ddraw quad and respects HiDPI switch");
+        HDC dc=GetDC(window);
+        const int ref=enabled ? 224 : 186;
+        const int actual=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScale)));
+        printf("fractional tile-seam pixel=%d expected=%d\n",actual,ref);
+        Check(abs(actual-ref)<=4,"fractional tile junction has continuous high-resolution coverage");
+        ReleaseDC(window,dc);
+        primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);
+        dc=GetDC(window);
+        Check(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScale))==RGB(0,0,0),
+            "fractional overlay and filter fringe disappear after text is erased");ReleaseDC(window,dc);
+        if(enabled && requestedScale==1.5f) for(float next:{1.75f,2.0f,1.0f,1.5f}) {
+            RECT size{0,0,(LONG)(640*next),(LONG)(480*next)};
+            AdjustWindowRect(&size,WS_OVERLAPPEDWINDOW,FALSE);
+            RECT position{};GetWindowRect(window,&position);
+            OffsetRect(&size,position.left-size.left,position.top-size.top);
+            SendMessageW(window,WM_ENTERSIZEMOVE,0,0);
+            SendMessageW(window,WM_SIZING,WMSZ_BOTTOMRIGHT,(LPARAM)&size);
+            // WM_SIZING only proposes a rectangle. A real OS sizing loop also
+            // applies it before exiting, including the resulting WM_SIZE.
+            SetWindowPos(window,nullptr,size.left,size.top,size.right-size.left,size.bottom-size.top,
+                SWP_NOZORDER|SWP_NOACTIVATE);
+            SendMessageW(window,WM_EXITSIZEMOVE,0,0);Pump(1000);
+            primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(500);
+            primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
+            // cnc-ddraw can replace native backing memory on a live resize.
+            t.base=(unsigned short*)d.lpSurface;t.pitch=d.lPitch/2;
+            vt::DrawCellAA(t,mark,25,10,16,0xFFFF,vt::RGB565);primary->Unlock(nullptr);Pump(300);
+            primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(200);
+            const float observed=vt::Presentation32::TestObservedScale();
+            const int expected=next==1 ? 186 : 224;
+            dc=GetDC(window);
+            const int pixel=GetRValue(GetPixel(dc,(int)ceil(32*next),(int)ceil(16*next)));
+            ReleaseDC(window,dc);
+            printf("live resize %.4g: observed=%.4g pixel=%d expected=%d\n",next,observed,pixel,expected);
+            Check(fabs(observed-(next==1 ? 0 : next))<0.001f && abs(pixel-expected)<=4,
+                "live fractional/2x/1x transitions retain alignment and coverage");
+            primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(100);
+        }
+        primary->Release();dd->RestoreDisplayMode();dd->Release();DestroyWindow(window);vt::Log::Shutdown();
+        return errors?1:0;
+    }
     if(perf2) {
         vt::GlyphCell glyph{};glyph.inkRows=16;
         vt::GlyphRaster2 hi;hi.width=32;hi.rows=32;hi.coverage.resize(1024);
@@ -260,7 +390,7 @@ int main(int argc,char** argv) {
         DDSURFACEDESC d{};d.dwSize=sizeof(d);primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
         vt::Target t{(unsigned short*)d.lpSurface,d.lPitch/2,0,0,639,479};
         vt::DrawCellAA(t,mark,20,20,1,0xFFFF,vt::RGB565);primary->Unlock(nullptr);Pump(500);
-        // First observed quad arms the overlay; all following uploads use 2x.
+        // First observed quad arms the overlay; later frames can use 2x glyph samples.
         primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(300);
         HDC dc=GetDC(window);
         if(compat2) {

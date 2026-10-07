@@ -65,8 +65,8 @@ namespace vt
         if (FT_New_Face((FT_Library)m_lib, path && *path ? path : m_path, 0, &face))
             return NULL;
 
-        // Variable fonts: the default instance is often not the weight we want
-        // (NotoSerifSC-VF defaults to ExtraLight 200).
+        // Apply the configured wght coordinate when the variable face has that
+        // axis; leave other axes at their defaults. Static faces have no axes.
         if (m_weight > 0 && FT_HAS_MULTIPLE_MASTERS(face))
         {
             FT_MM_Var* mm = NULL;
@@ -296,17 +296,15 @@ namespace vt
             return NULL;
         if (scale1024 < 1 || scale1024 > 1024) return NULL;
 
-        // phase is a SIGNED shift in quarter pixels (-3..3).  The outline is
-        // rasterised at size*m_ss, so a shift of one screen pixel is m_ss ppem
-        // there: in 26.6 units that is m_ss * 64, hence phase * 16 * m_ss.
+        // Signed phase is in quarter logical pixels (-3..3). One logical pixel
+        // spans m_ss raster pixels: in FreeType 26.6 units, the shift is
+        // phase * 16 * m_ss.
         if (phase < -3) phase = -3;
         if (phase >  3) phase =  3;
 
-        // cache key: codepoint + the ACTUAL advance used + subpixel phase.
-        // It used to store only "an advance was supplied", so once the published
-        // advance changed (Metrics=scaled writes it back) the cache still served
-        // the cell rasterised for the old advance - measuring, caching and
-        // drawing then disagreed (overlapping Latin, cramped punctuation).
+        // Cache key includes codepoint, clamped compatibility advance (0 means
+        // natural), signed raster phase and uniform row scale. Each variant
+        // needs its own coverage; font/raster setting changes clear the cache.
         const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
         const unsigned long long key = (unsigned long long)codepoint
             | ((unsigned long long)advKey << 32)
@@ -317,15 +315,15 @@ namespace vt
         std::map<unsigned long long, GlyphCell>::iterator it = m_cache.find(key);
         if (it != m_cache.end())
         {
-            const GlyphCell* hit = &it->second;   // map nodes are stable
+            const GlyphCell* hit = &it->second;   // stable until ClearCache/Shutdown; callers must not retain across those
             LeaveCriticalSection(&m_cs);
             return hit;
         }
         LeaveCriticalSection(&m_cs);
 
         // ---- rasterise (serialised: one FT_Face is not thread safe) ---------
-        // A miss happens once per glyph, so holding the lock here costs nothing
-        // in practice while making concurrent calls safe.
+        // A miss is per codepoint/advance/phase/scale variant. Recheck after
+        // locking in case another caller populated it; hits avoid raster work.
         EnterCriticalSection(&m_cs);
         {
             std::map<unsigned long long, GlyphCell>::iterator again = m_cache.find(key);
@@ -336,8 +334,8 @@ namespace vt
                 return hit;
             }
 
-            // bounded cache: a pathological stream of distinct codepoints must
-            // not grow without limit (131k keys x ~900 B would be ~118 MB)
+            // Bound logical variants to 16384 entries. Clear their optional 2x
+            // rasters together; raster allocations make memory use variable.
             if (m_cache.size() >= 16384)
                 ClearCache();
 
@@ -506,8 +504,9 @@ namespace vt
                         cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
                 }
 
-            // Retain a separate 2x raster, with hinting on the output grid.
-            // Logical advances/bearings above remain exactly the 1x layout.
+            // Retain a separate raster with hinting on a fixed 2x grid. D3D9
+            // scales these samples to the actual viewport, including fractions;
+            // logical advances/bearings above remain the same 1x layout.
             if(m_highResolution)
             {
                 const bool cjk=UsesCJKFace(codepoint) && m_faceB;

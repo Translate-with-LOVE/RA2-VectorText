@@ -4,15 +4,16 @@
 #include "GlyphSource.h"
 
 // ===========================================================================
-//  PixelWriter -- writes glyph masks into the game's own 16-bit surfaces.
+//  PixelWriter -- presentation adapter first, native RGB565 fallback.
 //
 //  Layout verified from BitFont::Blit (0x434120) and its 0x4343F8 path:
 //      dst = base + (pitch * y + x) * 2          [bytes]
 //      base  = BitFont[+0x0C]   (set by BitFont::Lock)
 //      pitch = BitFont[+0x10]   (in pixels)
 //      pixel = the 16-bit colour word written verbatim (no palette lookup)
-//  The engine writes MSB-first 1bpp masks; we do exactly the same, so our
-//  output is byte-identical in shape to the original for the same mask.
+//  Native mono drawing uses MSB-first 1bpp masks and direct colour writes.
+//  AA drawing blends coverage against the destination. A presentation adapter
+//  may retain either form outside RGB565 before this fallback is reached.
 // ===========================================================================
 
 namespace vt
@@ -40,29 +41,31 @@ namespace vt
                                        int, unsigned short, bool);
     void SetPresentationWriter(PresentationWriter writer);
 
-    // Draw one glyph cell at (x, y). Returns the number of pixels written.
+    // Draw one glyph cell at (x, y). Native fallback returns pixels written;
+    // an accepting presentation adapter returns its nonnegative status.
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color);
 
-    // Same, but blends using the cell's 8-bit coverage: dst = lerp(dst, color, cov).
-    // This is real antialiasing *inside the game's own 16-bit surface* -- the
-    // destination value is read back, so text composites correctly over
-    // whatever was drawn before it.
+    // Same return convention, using 8-bit coverage. The native fallback
+    // reads RGB565 destination pixels and blends in the selected colour space;
+    // the presentation adapter retains coverage for later BGRA8 composition.
     int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                    unsigned short color, const ColorFormat& fmt);
 
     unsigned short Blend(unsigned short dst, unsigned short src, int coverage, const ColorFormat& fmt,
                          int x = 0, int y = 0);
 
-    // Coverage gamma for the antialiased path (1.0 = linear, >1 = heavier text).
+    // Coverage gamma (1.0 = unchanged coverage, >1 = heavier text).
+    // This coverage adjustment is separate from linear-light colour blending.
     void SetCoverageGamma(double gamma);
 
-    // 32-bit compositing path: blend in linear light and dither the final
-    // quantisation to 16-bit (kills the banding of plain 5/6/5 rounding)
+    // RGB565 fallback can blend in linear light using wider intermediates
+    // and dither its final quantization; BGRA8 composition lives in PixelPlane.
     void SetLinearBlend(bool on);
     void SetDither(bool on);
 
-    // Outline: dilate the coverage by pixels and paint the ring in color`r
-    // before the glyph (SDF-style), which is what keeps small text readable.
+    // Nonzero pixels enables the fixed 3x3 neighbor-coverage pass. Values
+    // 1 and 2 use the same radius; this is not an SDF or a variable-width stroke.
+    // The native pass visits only pixels with nonzero glyph coverage.
     void SetOutline(int pixels, unsigned short color);
 }

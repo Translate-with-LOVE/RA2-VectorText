@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 #include "PixelPlane.h"
+#include <set>
 #include <algorithm>
 #include <cmath>
 
@@ -473,11 +474,39 @@ namespace vt
         }
     }
 
-    std::vector<PixelRect> PixelPlane::TextTiles() const
+    std::vector<PixelRect> PixelPlane::TextTiles(bool filtered) const
     {
         std::vector<PixelRect> result;
+        std::set<int> keys;
+        auto add=[&](int x,int y) {
+            if(x>=0 && y>=0 && x<m_tilesX && y<(m_height+TileH-1)/TileH)
+                keys.insert(y*m_tilesX+x);
+        };
+        auto visible=[](const PlanePixel& p) {
+            if(!p.high) return p.a!=0;
+            for(const auto& s:p.samples) if(s.a) return true;
+            return false;
+        };
         for(const auto& entry:m_tiles) {
-            const int x=(entry.first%m_tilesX)*TileW,y=(entry.first/m_tilesX)*TileH;
+            if(!filtered) { keys.insert(entry.first);continue; }
+            const int tx=entry.first%m_tilesX,ty=entry.first/m_tilesX;
+            add(tx,ty);
+            const auto& pixels=entry.second.pixels;
+            for(int y=0;y<TileH;++y) {
+                if(visible(pixels[y*TileW])) add(tx-1,ty);
+                if(visible(pixels[y*TileW+TileW-1])) add(tx+1,ty);
+            }
+            for(int x=0;x<TileW;++x) {
+                if(visible(pixels[x])) add(tx,ty-1);
+                if(visible(pixels[(TileH-1)*TileW+x])) add(tx,ty+1);
+            }
+            if(visible(pixels[0])) add(tx-1,ty-1);
+            if(visible(pixels[TileW-1])) add(tx+1,ty-1);
+            if(visible(pixels[(TileH-1)*TileW])) add(tx-1,ty+1);
+            if(visible(pixels[TileW*TileH-1])) add(tx+1,ty+1);
+        }
+        for(int key:keys) {
+            const int x=(key%m_tilesX)*TileW,y=(key/m_tilesX)*TileH;
             result.push_back({x,y,std::min(x+TileW,m_width),std::min(y+TileH,m_height)});
         }
         return result;
@@ -492,7 +521,10 @@ namespace vt
         const Tile* tile=nullptr;int tileKey=-1;
         const PlanePixel empty{};
         for(int y=rect.top;y<rect.bottom;++y) for(int x=rect.left;x<rect.right;++x) {
-            const int key=(y/TileH)*m_tilesX+x/TileW;
+            // Atlas gutters can extend beyond the surface. Preserve the
+            // requested output origin and fill those samples with transparency.
+            const bool inside=x>=0 && y>=0 && x<m_width && y<m_height;
+            const int key=inside ? (y/TileH)*m_tilesX+x/TileW : -1;
             if(key!=tileKey) {
                 const auto found=m_tiles.find(key);
                 tile=found==m_tiles.end() ? nullptr : &found->second;tileKey=key;

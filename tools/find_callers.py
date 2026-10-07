@@ -5,9 +5,11 @@
 """
 find_callers.py -- static call-site scan for gamemd.exe.
 
-Finds every relative `call rel32` (E8 xx xx xx xx) that targets one of the
-given addresses, then prints the call sites grouped by function.  This is how
-we answer questions like "who draws glyphs?" (callers of BitFont::Blit) or
+Scans byte patterns for relative `call rel32` (E8 xx xx xx xx) targeting the
+given addresses, then groups candidates by target. This is not a disassembler:
+data or instruction operands can contain matching bytes. Verify candidates
+against instruction boundaries before using them as hook evidence. This helps
+answer questions like "who draws glyphs?" (callers of BitFont::Blit) or
 "who sets the shadow colour?" (callers of BitFont::SetColor2) without a
 debugger.
 
@@ -56,9 +58,8 @@ def scan(data, image_base, target):
         if i + 5 > len(data):
             break
         rel = struct.unpack_from('<i', data, i + 1)[0]
-        # the call's next instruction is at i+5 (VA = image_base + i + 5 ... plus section VA)
-        # gamemd.exe is a single-section image whose file offset 0x400 maps to VA 0x401000,
-        # so VA = image_base + offset for PE images with that alignment; compute properly:
+        # For this contiguous-buffer helper, image_base is the VA of data[0].
+        # main() scans the PE file separately and maps raw offsets via sections.
         if image_base + i + 5 + rel == target:
             hits.append(image_base + i)
     return hits

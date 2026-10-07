@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 // ===========================================================================
-//  takeover_test.cpp -- offline verification of the M1 takeover path.
+//  takeover_test.cpp -- offline verification of the per-glyph fallback.
 //
 //  Builds a *synthetic* BitFont object that mirrors the layout the engine uses
 //  (verified against BitFont::Blit / BitFont::Lock) and feeds the real game.fnt
 //  symbol table + glyph bitmaps into it.  Then it calls vt::Takeover::TryBlit
 //  exactly like the hook does and checks:
 //
-//    1. the returned pen X is X + the ORIGINAL advance (layout stays identical)
+//    1. Metrics=game returns native advance + tracking, including clipped glyphs
 //    2. pixels really land in the surface, on the right rows
 //    3. the colour comes from BitFont+0x24 when the colour argument is -1,
 //       and from the argument otherwise
@@ -16,6 +16,7 @@
 //    5. out-of-bounds drawing is clipped to BitFont's bounds
 //    6. an unlocked surface (BitFont+0x0C == 0) is refused -> engine falls back
 //    7. a character with no glyph in game.fnt is refused -> engine handles it
+//    8. positive/negative tracking at BitFont+0x2C matches the native return
 //
 //  usage: takeover_test.exe [--aa 0|1] [--out file.bmp] [--fnt path]
 // ===========================================================================

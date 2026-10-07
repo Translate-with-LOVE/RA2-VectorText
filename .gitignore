@@ -15,4 +15,4 @@ backups/
 *.log
 *.tmp
 
-# NOTE: third_party/freetype is a git submodule (see .gitmodules)
+# FreeType and MinHook are tracked submodules (see .gitmodules).

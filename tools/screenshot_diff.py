@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # -*- coding: utf-8 -*-
 """
-screenshot_diff.py -- M1.4 verification helper.
+screenshot_diff.py -- native/vector screenshot comparison helper.
 
 Compares two screenshots of the same game screen taken with Mode=observe and
 Mode=draw, and answers the acceptance question: "are the differences confined

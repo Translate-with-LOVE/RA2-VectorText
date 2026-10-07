@@ -23,6 +23,8 @@ No standalone HarfBuzz library is linked by the current CMake build. Its notices
 
 ## MinHook and HDE
 
+The unmodified upstream source is stored as the `third_party/minhook` submodule, pinned to revision `8af6b4acae5a9388fd742b56fa79ece89d96f823` from [TsudaKageyu/minhook](https://github.com/TsudaKageyu/minhook). The static x86 build uses the same source revision as the previous vendored copy.
+
 MinHook is statically linked for presentation hooks. Copyright (C) 2009–2017 Tsuda Kageyu. Its embedded Hacker Disassembler Engine includes copyright (c) 2008–2009 Vyacheslav Patkov. These components use BSD-2-Clause terms; their complete upstream notices, including the HDE notices and disclaimers, are preserved in [LICENSES/MinHook-BSD-2-Clause.txt](LICENSES/MinHook-BSD-2-Clause.txt).
 
 ## Fonts and external software

@@ -7,13 +7,14 @@ verify_dll.py -- sanity-check a Syringe hook DLL built by this project.
 
 Checks, without running the game:
   * the file is a 32-bit PE DLL
-  * all expected hook handlers are exported with undecorated names
+  * every registered hook names an exported handler
   * a ".syhks00" section exists and holds well-formed 16-byte records
     { u32 hookAddr; u32 hookSize; const char* hookName }
   * every record's name pointer resolves inside the image to the name of an
     exported function (this is how Syringe binds a hook to its handler)
   * every name pointer has a base relocation (needed for ASLR)
   * neither ordinary nor delay imports require Phobos/Ares
+  * PE minimum versions and all named imports fit the audited Windows 7 baseline
   * hook spans do not overlap those of an installed Phobos.dll
 
 usage:  python verify_dll.py [path\\to\\VectorText.dll]
@@ -23,6 +24,47 @@ import struct
 import sys
 
 DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'VectorText.dll')
+
+# APIs used by this project's static MSVC/FreeType/MinHook build. Every entry
+# exists in Windows 7 kernel32.dll (including its forwarded exports). Keep this
+# positive allowlist: new dependencies must be reviewed instead of silently
+# passing an incomplete list of Windows 8/10-only functions. Dynamic rendering
+# APIs are checked separately in source; this is a loader/import check only.
+WIN7_KERNEL32 = set('''
+VirtualQuery DisableThreadLibraryCalls QueryPerformanceCounter QueryPerformanceFrequency
+InitializeCriticalSection InitializeCriticalSectionAndSpinCount EnterCriticalSection LeaveCriticalSection VirtualProtect
+GetModuleFileNameA GetModuleHandleW GetProcAddress LoadLibraryW CreateFileA GetFileSize
+ReadFile SetFilePointer WriteFile CloseHandle GetCurrentProcessId GetTickCount
+GetModuleHandleA GetPrivateProfileIntA GetPrivateProfileStringA WideCharToMultiByte
+GetCurrentProcess FlushInstructionCache VirtualAlloc GetLastError HeapCreate HeapDestroy
+HeapAlloc HeapReAlloc HeapFree Sleep GetCurrentThreadId OpenThread SuspendThread
+ResumeThread GetThreadContext SetThreadContext CreateToolhelp32Snapshot Thread32First
+Thread32Next VirtualFree DeleteCriticalSection ReleaseSRWLockExclusive AcquireSRWLockExclusive
+WakeAllConditionVariable SleepConditionVariableSRW IsProcessorFeaturePresent
+GetSystemTimeAsFileTime InitializeSListHead SetUnhandledExceptionFilter GetStartupInfoW
+RaiseException RtlUnwind InterlockedFlushSList SetLastError FlsAlloc FlsGetValue FlsSetValue
+FlsFree TlsAlloc TlsGetValue TlsSetValue TlsFree EncodePointer InitializeCriticalSectionEx ExitProcess TerminateProcess FreeLibrary
+GetModuleHandleExW GetModuleFileNameW IsDebuggerPresent UnhandledExceptionFilter GetStdHandle
+GetFileType DecodePointer GetConsoleMode ReadConsoleW SetFilePointerEx FindClose
+FindFirstFileExW FindNextFileW IsValidCodePage GetACP GetOEMCP GetCPInfo GetCommandLineA
+GetCommandLineW MultiByteToWideChar GetEnvironmentStringsW FreeEnvironmentStringsW
+SetEnvironmentVariableW LoadLibraryExW CompareStringW LCMapStringW GetProcessHeap
+GetStringTypeW SetStdHandle FlushFileBuffers GetConsoleOutputCP CreateFileW HeapSize
+SetEndOfFile WriteConsoleW
+'''.split())
+
+
+def check_win7(os_version, subsystem_version, symbols):
+    versions_ok = os_version == (6, 1) and subsystem_version == (6, 1)
+    unreviewed = [(module, name) for module, name in symbols
+                  if module.lower() != 'kernel32.dll' or name not in WIN7_KERNEL32]
+    print('Windows 7 PE target: OS %d.%d, subsystem %d.%d [%s]' %
+          (*os_version, *subsystem_version, 'ok' if versions_ok else 'BAD'))
+    for module, name in unreviewed:
+        print('Windows 7 import needs review: %s!%s' % (module, name))
+    print('Windows 7 named import baseline: %d imports [%s]' %
+          (len(symbols), 'ok' if not unreviewed else 'BAD'))
+    return versions_ok and not unreviewed
 
 
 def load(path):
@@ -143,6 +185,7 @@ def main():
 
     # ---- imports: rendering must also work without Phobos/Ares ------------
     imports = []
+    import_symbols = []
     for directory, descriptor_size, delayed in ((1, 20, False), (13, 32, True)):
         import_rva, import_size = struct.unpack_from('<II', d, dd + directory * 8)
         if not import_rva:
@@ -155,13 +198,31 @@ def main():
                 break
             if delayed:
                 name_va = image_base + fields[1] if fields[0] & 1 else fields[1]
+                thunk_rva = fields[4] if fields[0] & 1 else fields[4] - image_base
             else:
                 name_va = image_base + fields[3]
-            imports.append(read_cstr(name_va))
+                thunk_rva = fields[0] or fields[4]
+            module = read_cstr(name_va)
+            imports.append(module)
+            thunk = rva2off(thunk_rva)
+            while True:
+                symbol, = struct.unpack_from('<I', d, thunk)
+                if not symbol:
+                    break
+                if symbol & 0x80000000:
+                    name = '#%d' % (symbol & 0xFFFF)
+                else:
+                    symbol_va = (symbol if delayed and not fields[0] & 1
+                                 else image_base + symbol)
+                    name = read_cstr(symbol_va + 2)
+                import_symbols.append((module or '<invalid>', name))
+                thunk += 4
             off += descriptor_size
     independent = all(name and name.lower() not in ('phobos.dll', 'ares.dll') for name in imports)
     print('\nimports   : %s' % ', '.join(name or '<invalid>' for name in imports))
     print('no Phobos/Ares dependency: %s' % ('ok' if independent else 'BAD'))
+    win7 = check_win7(struct.unpack_from('<HH', d, opt + 40),
+                     struct.unpack_from('<HH', d, opt + 48), import_symbols)
 
     # ---- exports ----------------------------------------------------------
     exp_rva, exp_size = struct.unpack_from('<II', d, dd)
@@ -203,7 +264,7 @@ def main():
             o += blocksize
 
     print('\n.syhks00 records:')
-    ok = independent
+    ok = independent and win7 and machine == 0x14C and magic == 0x10B and bool(characteristics & 0x2000)
     records = []
     for name, va, vsize, rawptr, rawsize in hooks:
         count = 0

@@ -16,7 +16,8 @@
 //
 //  Return value:
 //      0        -> Syringe replays the original `size` bytes it overwrote,
-//                  then continues at hookAddr + size.  ("observe and pass on")
+//                  then continues at hookAddr + size (pass-through, with any
+//                  register changes made by the handler).
 //      nonzero  -> Syringe jumps to that address instead; the register block
 //                  may be modified beforehand to change arguments/results.
 //
@@ -62,7 +63,7 @@ struct REGISTERS
     void EBX(DWORD v) { ebx = v; }
     void ECX(DWORD v) { ecx = v; }
     void EDX(DWORD v) { edx = v; }
-    void ESP(DWORD v) { esp = v; }        // needed to skip a callee (pop args + ret)
+    void ESP(DWORD v) { esp = v; }        // captured slot only: popad ignores it; stack changes need a trampoline
 
     // Stack access relative to the ESP captured at the hook address.
     // At a function's first instruction ESP+0 is the return address and

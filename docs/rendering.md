@@ -12,6 +12,34 @@
 游戏场景仍使用原 RGB565 表面；有 cnc-ddraw 时，文字可直接在 BGRA8 呈现阶段合成，
 消除文字边缘的 5/6/5 量化。字号、字体设计和最终呈现缩放仍会影响观感。
 
+## 模块边界
+
+Syringe hook 在 `Hooks.cpp` 和 `hooks/` 中读取原生参数，调用 `Takeover.h` 的接口。
+`takeover/LineLayout.cpp` 准备和消费整行计划，`Measurement.cpp` 使用同一套自然字距原语进行只读测量，
+`Takeover.cpp` 负责字体初始化和逐字回退；拒绝统计与返回跳板放在 `Diagnostics.cpp`。
+每个线程的行计划由布局模块持有，待消费的背景、tooltip 和宽度测量由 hook 测量模块持有。
+私有头文件只连接这些实现单元，不提供另一套渲染算法。
+
+字形经 `GlyphSource` 缓存后交给 `PixelWriter`。没有 32 位接管时写入 RGB565；接管时调用
+`presentation/State.cpp` 登记的 writer，向 `PixelPlane` 稀疏文字层记录覆盖率。
+`Surfaces.cpp` 跟踪 DirectDraw 表面和加载界面的 BSurface，负责复制、填充、清除与销毁时的文字层同步。
+加载界面的内存表面和游戏内显示表面保持各自的登记与复制路径。
+
+| 呈现实现 | 边界 |
+| --- | --- |
+| `Presentation32.cpp` | 检测 cnc-ddraw、验证游戏入口、安装 hook 和公开接口。 |
+| `presentation/State.*` | 唯一的呈现状态、原函数槽、锁、文字 writer 和帧统计。 |
+| `presentation/Surfaces.cpp` | 原生表面及文字层的生命周期和复制/填充同步。 |
+| `presentation/Gdi.cpp`、`OpenGL.cpp` | 各后端的 BGRA8 转换与上传，保留原目标矩形和状态。 |
+| `presentation/D3d9.cpp` | D3D9 纹理接管、上传、GPU 合成和设备状态恢复。 |
+| `presentation/Atlas.*` | 高分辨率稀疏图集、边界采样和实际视口倍率计算。 |
+| `presentation/TestAccess.cpp` | 测试适配器；只编入显示测试，不进入 DLL。 |
+
+`Config.cpp` 负责 INI 解析与 `Cfg` 访问器，`Logger.cpp` 负责记录调用及输出摘要。
+配置仍通过日志的现有初始化锁延迟加载；通用配置查询保留原读取时机，布尔解析及默认值不因拆分改变。
+CMake 分别构建字形、布局/配置、文字层静态库，DLL 和显示测试使用同一份呈现源文件列表。
+FreeType、MinHook 都使用固定提交的 submodule；自有代码的格式规则在 `.clang-format` 中。
+
 ## 渲染流程
 
 游戏先锁定文字表面，并决定每行字符范围、换行、Y、阴影遍数、显现进度和调用颜色。
@@ -105,8 +133,8 @@ BGRA8 预览复用实际单行 hook 路径、兼容像素及 `PixelPlane` 合成
 DirectDraw 创建及表面接口，不依赖 Phobos 或 Ares。没有 cnc-ddraw、配置关闭、
 表面格式不受支持或呈现接入失败时，继续使用 RGB565 路径。
 适配针对本机 cnc-ddraw 1.3.5，测试包含 Direct3D9、OpenGL 和 GDI。
-当前实际显示测试仍有两项 D3D9 屏幕像素采样失败：CPU 合成值正确，但屏幕取样为黑色，
-原因尚未确认。不能据此宣称三后端全部验收通过；其他版本也需验证。
+本机当前 D3D9、OpenGL、GDI 的实际显示像素、复制、清除和翻页检查均通过，
+D3D9 的 2×、小数倍率、动态缩放及全屏兼容检查也通过。其他驱动和 cnc-ddraw 版本仍需验证。
 
 游戏文字 hook 生成的字形被保留在与像素缓冲区地址关联的稀疏文字层中，
 同时在 RGB565 中保留兼容像素和其原始背景。最终合成直接使用高精度覆盖率与原始背景，
@@ -139,21 +167,27 @@ BitText::Print/DrawText 入口按确切 vtable `0x7E2070` 登记其内存文字�
 - OpenGL：分配 RGBA8 纹理，上传时将背景和文字合成为 BGRA8，恢复原像素解包设置。
 - GDI：将原 16 位位图转换为 32 位 DIB，保留源行方向、目标矩形及缩放。
 
-### 自动 2× 输出文字
+### 自动 HiDPI 文字输出
 
 `HiDPI=true`（默认）读取 D3D9 最终画面四边形和源纹理坐标，判断实际 X/Y
 缩放比例。窗口、无边框/独占全屏、整数缩放、视口偏移及每游戏配置覆盖，都按
 cnc-ddraw 最终生效的结果处理；不只依据 `windowed` 或 `fullscreen` 的单一标志。
-只有 X/Y 同时为 2× 才启用高分辨率文字；1×、非整数/非等比倍率、其他后端继续原合成。
+X/Y 为相同的放大倍率时启用高分辨率文字，包括 1.25×、1.333×、1.5×、1.75× 等小数倍；
+1×、缩小、非等比倍率、其他后端继续原合成。读取的是实际画面四边形，不单独将
+Windows 的 DPI 百分比叠加到字号上，保持与画面、鼠标及背景框的坐标一致。
 窗口调整后重新判断，首帧及资源分配失败时保持 1×；显卡不支持所需纹理或线性
 混合时回退，不反复尝试失败的分配。`HiDPI=false` 使用原 1× 合成，也不分配 2× 字形缓存。
 
-高分辨率字形由独立 FreeType face 在目标像素尺寸直接栅格化：中文 16→32px，
+高分辨率字形由独立 FreeType face 在固定 2× 源尺寸直接栅格化：中文 16→32px，
 英文 13→26px。保留原逻辑 advance、kerning、四分之一像素 X 相位、基线、
 换行和背景测量；不放大旧文字位图，也不增加文字的视觉尺寸。每个逻辑像素
 保留四个独立覆盖率采样，复制、镜像和清除同步处理低/高分辨率文字。
+精确 2× 输出仍使用点采样，保持现有四个采样与输出像素逐一对应。
+其他等比放大倍率在 GPU 上对同一个 2× 字形源做线性过滤，不重新混合 RGB565 兼容文字。
+超过 2× 的输出也保持正确位置和大小，但会放大这个 2× 字形源，不能等同于原生 3×/4× 栅格化。
+窗口调整时重新判断倍率；字形缓存不因每个小数倍率重新生成。
 
-2× 时世界纹理只含原背景，由 cnc-ddraw 原滤镜（包括 Bicubic）绘制。
+高清文字层启用时世界纹理只含原背景，由 cnc-ddraw 原滤镜（包括 Bicubic）绘制。
 同一帧的文字在最终 D3D9 画面上另行合成，使用目标网格采样；不再经过世界层
 的 Bicubic 放大。调用后恢复 D3D9 全部状态。上传纹理分别保存文字快照，避免
 双缓冲中混入下一帧的覆盖率。线性抗锯齿使用预乘颜色、sRGB 读写及混合能力检查。
@@ -164,8 +198,10 @@ cnc-ddraw 最终生效的结果处理；不只依据 `windowed` 或 `fullscreen`
 不能单凭这一条证明某个绘字目标已接管。加载界面还需检查
 `Present32: CPU text surface registered ... hi-raster=1`；它确认内存表面已保留高分辨率采样，
 最终复制与显示效果需结合加载画面验收。
-该路径把有文字的 32×16 逻辑像素块打包成 64×32 输出像素的紧凑图集，
-按实际文字块数量增长。GPU 用一次三角形批次只叠加这些块，不再更新或
+该路径把有文字的 32×16 逻辑像素块的 64×32 高分辨率采样打包成紧凑图集，
+每格四周复制相邻文字的 2 个高分辨率采样作为滤波边界，单元为 68×36。
+文字碰到块边缘时补上滤波覆盖到的相邻单元；表面之外填透明，消除小数倍率下的块间接缝和串色。
+图集按实际文字块数量增长。GPU 用一次三角形批次只叠加这些块，不再更新或
 混合整张 4096² 文字纹理。无文字时不上传图集、不做额外绘制；原生 1×
 全屏不会分配这类图集。每张世界上传纹理保留自己的图集和块列表。
 
@@ -296,11 +332,24 @@ Syringe 的 `popad` 会跳过保存的 ESP 槽，不能通过改写 REGISTERS.es
 
 ## 构建、验证与排查
 
+最低运行系统为 Windows 7，构建目标为 x86，C/C++ 运行库、FreeType 和 MinHook 静态链接。
+编译宏统一限定 `WINVER/_WIN32_WINNT=0x0601`、`NTDDI_VERSION=0x06010000`；
+DLL 和测试程序的 PE OS / subsystem 版本均为 6.1。
+构建入口默认选择 MSVC 14.44（VS 2022），可通过 `VT_VCVARS_VER` 选择 14.29 或 14.3x/14.4x。
+VS 2026 可以作为工具安装宿主，必须安装兼容工具集，CMake 拒绝其默认的 14.50+；
+参见[微软平台支持说明](https://learn.microsoft.com/en-us/cpp/overview/supported-platforms-visual-cpp)。
+当前使用的动态 GDI、OpenGL 和 D3D9 呈现接口不要求 Win8+ 或 Windows DPI API，
+HiDPI 使用实际画面倍率，仍按驱动能力检查及现有回退路径工作。
+`verify_dll.py` 对普通与延迟导入使用已审核的 Win7 kernel32 API 白名单；
+新增模块、API 或按序号导入必须审核并更新白名单，不能只依靠 PE 版本判断兼容性。
+静态 CRT 的新 API 探测保留旧 API 回退；导入检查并不覆盖所有运行时分支。
+本机离线和显示测试不能代替 Win7 实机上的 DLL 加载、游戏与驱动验收。
+
 执行 `build.bat` 通过 CMake 构建并部署游戏目录 DLL；仅在配置不存在时复制 INI，保留已有运行配置。重启游戏加载。
 
-首次获取仓库时运行 `git submodule update --init --recursive`，取得固定版本的 FreeType。
-入口脚本使用 MSVC x86、CMake 3.21+ 和 Ninja；可通过 `VT_VCVARS`、`VT_CMAKE` 指定工具。
-在 x86 Native Tools 命令行中可以直接运行：
+首次获取仓库时运行 `git submodule update --init --recursive`，取得固定版本的 FreeType 和 MinHook。
+入口脚本使用兼容 Win7 的 MSVC x86、CMake 3.21+ 和 Ninja；可通过 `VT_VCVARS`、`VT_CMAKE` 指定工具。
+在相应工具集的 x86 Native Tools 命令行中可以直接运行：
 
 ```bat
 cmake --preset x86-release
@@ -313,7 +362,7 @@ cmake --build --preset deploy
 涉及原生字体与机器码的检查需要本机的 `game.fnt`、`gamemd.exe`，Phobos 兼容检查还需要
 本机 `Phobos.dll`；仓库不包含这些游戏文件。默认从仓库的上级游戏目录读取，可在配置时
 用 `-DVT_GAME_DIR=游戏目录` 指定其他安装位置。
-`offline` 排除需要实际桌面的 `cnc_display`；当前 21 项离线检查通过，
+`offline` 排除需要实际桌面的 `cnc_display`；当前 22 项离线检查通过，
 不代表最终 GPU 显示、游戏性能或所有 cnc-ddraw 配置已验收。
 普通构建将 DLL、示例 INI、README、本文和完整许可复制到 `build/cmake/bin/`。
 部署的许可位于游戏目录 `VectorText-licenses/`；发布 DLL 时还需按 GPLv3 提供对应源码。
@@ -329,9 +378,10 @@ cmake --build --preset deploy
 | `present32_test.bat` | BGRA8 与 RGB565 精度、稀疏文字层、复制、拉伸、裁剪及重复重绘 |
 | `cnc_present_test.bat` | 三后端实际屏幕像素、复制/清除/翻页；2× 四个独立采样、非黑背景线性混合、2×→1× 调整、无边框与独占全屏；无 cnc-ddraw/关闭选项回退 |
 | CTest `cpu_loading_text` | 无 GPU 呈现器时登记内存文字目标，保留独立 2× 采样；复制到 DirectDraw 目标、失败复制回滚、100 次重绘、清除、销毁与地址复用 |
+| CTest `fractional_overlay` | 实际图集和输出顶点与连续图像采样对照：1.01×～3×、视口偏移、裁剪、块间接缝、滤波尾部、2× 点采样和非法倍率回退 |
 | `takeover_test.bat` | 逐字回退的颜色、AA、裁剪、未锁定拒绝、缺字拒绝和吞吐 |
 | `hooktest_draw.bat --mode draw` | 返回跳板、ESP/EAX 和拒绝路径；支持 off/observe/draw 模式检查 |
-| `python tools\verify_dll.py` | x86 DLL、15 条钩子记录、导出、重定位、无 Phobos/Ares 普通或延迟导入，以及本机 Phobos hook 区间不交叠 |
+| `python tools\verify_dll.py` | x86 DLL、Win7 PE 6.1 和普通/延迟导入 API 白名单、15 条钩子记录、导出、重定位、无 Phobos/Ares 依赖，以及本机 Phobos hook 区间不交叠 |
 
 生产预览输出 `build/render-qa/raster-after.bmp` 和 `raster-scene.bmp`。
 `bgra-guides.bmp` 只在预览叠加红色上沿 Y、蓝色中线 Y+8、黄色下沿 Y+16，并输出来自实际栅格的 JSON 度量。
@@ -340,6 +390,10 @@ cmake --build --preset deploy
 单独比较参数时修改该 QA 目录的 INI，并在该目录运行
 `render_quality.exe comparison.bmp --check --line`；加 `--scene` 使用纹理背景。
 各次运行独立初始化配置和缓存，不修改游戏目录 INI。
+`cnc_present_test.bat --fractional-only` 专测实际 D3D9 小数倍率输出：1.25×、1.5×、1.75×、
+2.25×、2.5× 的块边界覆盖率和清除，以及 `HiDPI=false` 的回退。测试配置仅写入隔离 QA 目录。
+另验证 1.5×→1.75×→2×→1×→1.5× 的连续窗口缩放；资源重建后的首轮仍保留兼容上传，
+实际刷新后切换为对应倍率的高清合成。
 `loading-2x.bmp` 使用独立 2× 字形绘制加载标题和两行任务目标，不经过先画 1× 再放大的过程。
 手动生成可运行 `render_quality.exe loading-2x.bmp --check --line --bgra --loading --hidpi`。
 该预览验证字形和文字合成，不模拟最终世界层滤镜；实际游戏以桌面截图检查。
@@ -356,7 +410,7 @@ cmake --build --preset deploy
 
 - `LineRender=false`：改用逐字绘制；不启用自然单行布局。
 - `Present32=false`：关闭 cnc-ddraw 的 BGRA8 合成，使用 RGB565。
-- `HiDPI=false`：保留 BGRA8，关闭自动 2× 输出文字。
+- `HiDPI=false`：保留 BGRA8，关闭跟随实际倍率的高清文字层。
 - `DynamicTextWidth=false`：保留原动态框度量。
 - `Mode=observe`：只观测文字管线，让游戏绘制原文字。
 - `Mode=off`：关闭矢量接管，使用原生文字。

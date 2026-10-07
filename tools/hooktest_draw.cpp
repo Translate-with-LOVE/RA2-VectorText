@@ -5,16 +5,16 @@
 //
 //  takeover_test.cpp proves that Takeover::TryBlit draws correctly; this test
 //  proves the layer above it: that the exported hook handler, when driven
-//  exactly the way Syringe drives it (REGISTERS block, ESP at the return
+//  with Syringe's entry layout (REGISTERS block, ESP at the return
 //  address), implements the "skip the callee" contract properly:
 //
-//     * returns the caller's return address (so Syringe jumps there)
-//     * pops the return address + the 4 stack arguments (ret 0x10)
+//     * returns a trampoline address, leaving the captured ESP unchanged
+//     * verifies trampoline bytes equivalent to ret 0x10 (not executed here)
 //     * leaves the new pen X in EAX
 //     * has actually written the glyph into the locked 16-bit surface
 //
 //  and, in the refusal cases, that it returns 0 with ESP untouched (the engine
-//  then runs its own code, i.e. a byte-for-byte fallback).
+//  then resumes its native code; this test does not execute Syringe replay).
 //
 //  usage: hooktest_draw.exe [--mode off|observe|draw] [--fnt path]
 // ===========================================================================
