@@ -15,6 +15,8 @@ if errorlevel 1 (popd & exit /b 1)
 render_quality.exe bgra-scene.bmp --check --line --scene --bgra
 if errorlevel 1 (popd & exit /b 1)
 render_quality.exe bgra-guides.bmp --check --line --bgra --guides
+if errorlevel 1 (popd & exit /b 1)
+render_quality.exe loading-2x.bmp --check --line --bgra --loading --hidpi
 set "RC=%ERRORLEVEL%"
 popd
 exit /b %RC%

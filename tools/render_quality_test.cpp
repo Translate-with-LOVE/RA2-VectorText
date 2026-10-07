@@ -32,16 +32,41 @@ static int PaintPreview(const vt::Target& target, const vt::GlyphCell& cell,
 }
 
 static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels, int w, int h,
-                     const vt::PixelPlane* plane = nullptr, bool guides = false, int rowCount = 0, int rowStep = 23) {
-    int pitch = (w * 3 + 3) & ~3;
-    std::vector<unsigned char> bmp(54 + pitch * h, 0);
+                     const vt::PixelPlane* plane = nullptr, bool guides = false, int rowCount = 0, int rowStep = 23,
+                     bool hidpi = false, bool linear = true) {
+    const int scale = hidpi ? 2 : 1, outputW = w * scale, outputH = h * scale;
+    // Use the same independent 2x samples and encoded overlay as D3D9.
+    // The base scene is nearest-neighbour here; cnc-ddraw's scene shader is
+    // deliberately outside this offline text preview.
+    std::vector<unsigned int> overlay;
+    if (hidpi) {
+        overlay.resize((size_t)outputW * outputH);
+        plane->Overlay2Rect(overlay.data(), outputW, {0, 0, w, h});
+    }
+    int pitch = (outputW * 3 + 3) & ~3;
+    std::vector<unsigned char> bmp(54 + pitch * outputH, 0);
     bmp[0] = 'B'; bmp[1] = 'M';
     *(unsigned int*)&bmp[2] = (unsigned int)bmp.size();
     *(unsigned int*)&bmp[10] = 54; *(unsigned int*)&bmp[14] = 40;
-    *(int*)&bmp[18] = w; *(int*)&bmp[22] = h;
+    *(int*)&bmp[18] = outputW; *(int*)&bmp[22] = outputH;
     *(unsigned short*)&bmp[26] = 1; *(unsigned short*)&bmp[28] = 24;
-    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+    for (int oy = 0; oy < outputH; ++oy) for (int ox = 0; ox < outputW; ++ox) {
+        const int x = ox / scale, y = oy / scale;
         unsigned int c = plane ? plane->Composite(x, y, pixels[y * w + x]) : vt::PixelPlane::Expand565(pixels[y * w + x]);
+        if (hidpi) {
+            const auto p = plane->At(x, y);
+            const unsigned int background = vt::PixelPlane::Expand565(p.tracked ? p.background : pixels[y * w + x]);
+            const unsigned int ink = overlay[(size_t)oy * outputW + ox];
+            const double alpha = (ink >> 24) / 255.0;
+            c = 0;
+            for (int shift : {0, 8, 16}) {
+                double fg = ((ink >> shift) & 255) / 255.0, bg = ((background >> shift) & 255) / 255.0;
+                if (linear) { fg = pow(fg, 2.2); bg = pow(bg, 2.2); }
+                double value = fmin(1.0, fg + bg * (1.0 - alpha));
+                if (linear) value = pow(value, 1.0 / 2.2);
+                c |= (unsigned int)floor(value * 255.0 + 0.5) << shift;
+            }
+        }
         if (guides && x >= 4 && ((x-4)%8)<4) for (int row=0;row<rowCount;++row) {
             const int relative=y-(6+row*rowStep);
             const unsigned int guide=relative==0?0xEF6666:relative==8?0x73AAFF:relative==16?0xFFCC55:0;
@@ -52,7 +77,7 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
                 result|=((((c>>shift)&255)*3+((guide>>shift)&255)*2)/5)<<shift;
             c=result;
         }
-        unsigned char* p = &bmp[54 + (h - y - 1) * pitch + x * 3];
+        unsigned char* p = &bmp[54 + (outputH - oy - 1) * pitch + ox * 3];
         p[0] = (unsigned char)c;
         p[1] = (unsigned char)(c >> 8);
         p[2] = (unsigned char)(c >> 16);
@@ -63,13 +88,18 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
 
 int main(int argc, char** argv) {
     const char* output = argc > 1 ? argv[1] : "preview.bmp";
-    bool check = false, line = false, scene = false, bgra = false, guides = false;
+    bool check = false, line = false, scene = false, bgra = false, guides = false, hidpi = false, loading = false;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--check")) check = true;
         if (!strcmp(argv[i], "--line")) line = true;
         if (!strcmp(argv[i], "--scene")) scene = true;
         if (!strcmp(argv[i], "--bgra")) bgra = true;
         if (!strcmp(argv[i], "--guides")) guides = true;
+        if (!strcmp(argv[i], "--hidpi")) hidpi = true;
+        if (!strcmp(argv[i], "--loading")) loading = true;
+    }
+    if ((hidpi && !bgra) || (guides && (hidpi || loading))) {
+        printf("--hidpi requires --bgra; --guides uses the standard 1x samples\n"); return 2;
     }
     FILE* f = fopen(VT_GAME_DIR "/game.fnt", "rb");
     if (!f) return 2;
@@ -82,7 +112,7 @@ int main(int argc, char** argv) {
     fd.stride = hdr[2]; fd.lines = hdr[3]; fd.bytes = hdr[6];
     fd.symbols = (const unsigned short*)&data[28];
     fd.bitmaps = &data[28 + 131072];
-    const wchar_t* rows[] = {
+    std::vector<const wchar_t*> rows = {
         L"Phobos development build #48. Please test the build before shipping.",
         L"难度：普通",
         L"我们快到了。我们的部队已经抵达了尤里邪恶阴谋的核心。",
@@ -97,12 +127,18 @@ int main(int argc, char** argv) {
         L"中文，中文。中文：中文；中文！中文？中文、中文。",
         L"Mixed (中文) [MIDAS] 04:12, done. Test: 50%; OK!"
     };
-    const int rowCount = sizeof(rows) / sizeof(rows[0]);
+    if (loading) rows = {
+        L"军事行动: 风暴使者 - 地点: 维尔京群岛",
+        L"任务目标一: 保护天气控制机",
+        L"任务目标二: 消灭敌军部队"
+    };
+    const int rowCount = (int)rows.size();
     unsigned char bf[128] = {};
     *(void**)(bf + 4) = &fd;
-    int w = 720;
+    int w = loading ? 420 : 720;
     const int rowStep = guides ? 40 : 23;
-    const int h = guides ? rowCount*rowStep+12 : 320;
+    const int h = loading ? 104 : guides ? rowCount*rowStep+12 : 320;
+    const auto rowY = [&](int row) { return loading && row ? 56 + (row-1)*20 : 6 + row*rowStep; };
     // The preview canvas must contain the complete natural-width sample.
     // Measurement does not require a locked surface; allow both side margins.
     if (line) for (const wchar_t* row : rows) {
@@ -125,6 +161,7 @@ int main(int argc, char** argv) {
     planeOptions.linear = vt::Cfg::LinearBlend(); planeOptions.gamma = vt::Cfg::Gamma();
     planeOptions.antialias = vt::Cfg::AntiAlias(); planeOptions.outline = vt::Cfg::Outline();
     planeOptions.outlineColor = vt::Cfg::OutlineColor();
+    planeOptions.highResolution = hidpi;
     vt::PixelPlane plane(w, h, planeOptions);
     if (bgra) { previewPlane = &plane; vt::SetPresentationWriter(PaintPreview); }
     *(void**)(bf + 4) = &fd; *(void**)(bf + 12) = &pixels[0];
@@ -132,8 +169,8 @@ int main(int argc, char** argv) {
     *(int*)(bf + 56) = w - 1; *(int*)(bf + 60) = h - 1;
     int fails = 0;
     for (int r = 0; r < rowCount; ++r) {
-        *(unsigned short*)(bf + 36) = r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
-        int x = 4, y = 6 + r * rowStep;
+        *(unsigned short*)(bf + 36) = loading ? 0xFFFF : r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
+        int x = 4, y = rowY(r);
         if (line && !vt::Takeover::BeginLine(bf, rows[r], -1, x, y, x, 0, 0, 0x43464D)) ++fails;
         for (const wchar_t* p = rows[r]; *p; ++p) {
             int oldWidth = fd.bitmaps[(fd.symbols[*p] - 1) * fd.bytes];
@@ -149,13 +186,20 @@ int main(int argc, char** argv) {
     if (data != original) { printf("FAIL: game metrics/data changed\n"); ++fails; }
     if (bgra) {
         bool touchesEdge = false;
+        bool independentSamples = false;
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            const auto p = plane.At(x, y);
+            if (p.high) for (int i = 1; i < 4; ++i)
+                independentSamples |= p.samples[i].a != p.samples[0].a;
+        }
+        if (hidpi && !independentSamples) { printf("FAIL: 2x preview has no independent output samples\n"); ++fails; }
         for (int x = 0; x < w; ++x)
             touchesEdge |= plane.At(x, 0).a != 0 || plane.At(x, h - 1).a != 0;
         for (int y = 0; y < h; ++y)
             touchesEdge |= plane.At(0, y).a != 0 || plane.At(w - 1, y).a != 0;
         if (touchesEdge) { printf("FAIL: preview ink touches canvas edge\n"); ++fails; }
     }
-    WriteBmp(output, pixels, w, h, bgra ? &plane : nullptr, guides, rowCount, rowStep);
+    WriteBmp(output, pixels, w, h, bgra ? &plane : nullptr, guides, rowCount, rowStep, hidpi, planeOptions.linear);
     if (guides) {
         FILE* metadata=fopen((std::string(output)+".json").c_str(),"wb");
         if(!metadata) return 4;

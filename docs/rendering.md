@@ -122,6 +122,13 @@ FillRect 和 Fill 也经过这个入口，CPU 写入相同黑底时仍会清掉�
 零色键复制保留透明背景并转移源文字。同步遵循游戏的成对裁剪规则，区分 DSurface
 与直接持有内存的 XSurface；原生复制失败时恢复文字层。内部 Lock/Unlock 不重复
 对已同步的复制执行像素差异失效检查，避免背景变化时误删新转移的文字。
+加载界面在 `0x552D94..0x552DCD` 构造原生 `BSurface`，不是 DirectDraw 表面。
+BitText::Print/DrawText 入口按确切 vtable `0x7E2070` 登记其内存文字层；
+每次绘字前验证兼容像素并开始新一轮覆盖率，随后通过同一个 `0x437350` 复制入口转移文字。
+在已核实的标量删除析构入口 `0x411650` 释放记录，先清理文字层再让游戏释放内存，
+防止后续复用相同对象或像素地址时留下旧字。目标尺寸、pitch 或分配地址变化时重建记录。
+加载图可能在首个 GPU 上传前绘字，因此该内存目标先保留高精度采样和 RGB565 兼容像素；
+呈现器就绪后按实际输出比例合成，不改变游戏内的字体参数。析构入口不匹配时此目标继续使用 RGB565。
 独立文字层不再只依赖这些入口：直接 CPU 恢复背景也能使旧覆盖率失效。
 离线真实 cnc-ddraw 测试覆盖了数字居中位置变化、位数减少，以及 1000 次直接内存
 黑底恢复后移动红字；实际遭遇战的黑幕、残影和卡死仍需用新 DLL 复测。
@@ -153,7 +160,10 @@ cnc-ddraw 最终生效的结果处理；不只依据 `windowed` 或 `fullscreen`
 每次上传只提交当前文字块，旧图集单元不参与后续绘制；原生 CPU 写入的失效检测继续生效。
 
 日志 `Present32: output text scale=2 viewport=3840x2160 logical=1920x1080`
-说明 1080p 游戏画面实际以 4K 呈现，文字已走目标分辨率路径。
+说明 1080p 游戏画面实际以 4K 呈现，呈现器已启用目标分辨率文字路径，
+不能单凭这一条证明某个绘字目标已接管。加载界面还需检查
+`Present32: CPU text surface registered ... hi-raster=1`；它确认内存表面已保留高分辨率采样，
+最终复制与显示效果需结合加载画面验收。
 该路径把有文字的 32×16 逻辑像素块打包成 64×32 输出像素的紧凑图集，
 按实际文字块数量增长。GPU 用一次三角形批次只叠加这些块，不再更新或
 混合整张 4096² 文字纹理。无文字时不上传图集、不做额外绘制；原生 1×
@@ -176,7 +186,8 @@ GDI 路径在第一次有效呈现后启用文字层，未就绪时先使用原�
 公开 DirectDraw 操作、游戏的 DSurface 填充和 XSurface 软件复制入口同步文字层。
 绕过所有复制入口移动文字时，仅兼容像素随原生内存移动，无法恢复高精度覆盖率；
 此类文字会以原生 RGB565 精度显示。写入值恰好等于兼容标记时仍无法区分覆盖和保留。
-非 DirectDraw 的内存目标继续走原路径。该适配器按游戏进程生命周期使用，运行中不支持卸载 DLL。
+已核实的原生 BSurface 内存文字目标也同步文字层；其他未识别内存目标继续走原路径。
+该适配器按游戏进程生命周期使用，运行中不支持卸载 DLL。
 Syringe 读取握手时不会修改自己的导入；MinHook 初始化和呈现 detour 安装均在 loader lock 外。
 
 日志 `Present32: ... promoted to BGRA8` 或启用信息可用于诊断；
@@ -302,7 +313,7 @@ cmake --build --preset deploy
 涉及原生字体与机器码的检查需要本机的 `game.fnt`、`gamemd.exe`，Phobos 兼容检查还需要
 本机 `Phobos.dll`；仓库不包含这些游戏文件。默认从仓库的上级游戏目录读取，可在配置时
 用 `-DVT_GAME_DIR=游戏目录` 指定其他安装位置。
-`offline` 排除需要实际桌面的 `cnc_display`；当前 19 项离线检查通过，
+`offline` 排除需要实际桌面的 `cnc_display`；当前 21 项离线检查通过，
 不代表最终 GPU 显示、游戏性能或所有 cnc-ddraw 配置已验收。
 普通构建将 DLL、示例 INI、README、本文和完整许可复制到 `build/cmake/bin/`。
 部署的许可位于游戏目录 `VectorText-licenses/`；发布 DLL 时还需按 GPLv3 提供对应源码。
@@ -314,9 +325,10 @@ cmake --build --preset deploy
 | 同上：无外部扩展回归 | 明确确认 Phobos/Ares 未加载，再验证四组计数器的完整像素、旧步进和 ESP |
 | 同上：Phobos 背景兼容 | 从本机 Phobos.dll 导出定位并隔离执行实际背景处理机器码，仅重定向全局数据和填充函数；验证 40/70 透明度、关闭时原生回退、每行只填充一次和 19px 行距下无交叠；不初始化 Phobos DLL |
 | `baseline_test.bat` | 独立 FreeType 位图对照：中英文、数字、符号、超采样、hinting、X 相位、缩放与顶边裁剪；另含 6,840 次最终 2× 字形及位置对照 |
-| `render_quality_test.bat` | 生产配置在黑底与纹理背景的预览；覆盖率、缓存、自然步进、颜色通道与原字体数据不变 |
+| `render_quality_test.bat` | 生产配置在黑底、纹理背景和加载界面 2× 字形的预览；覆盖率、缓存、自然步进、颜色通道与原字体数据不变 |
 | `present32_test.bat` | BGRA8 与 RGB565 精度、稀疏文字层、复制、拉伸、裁剪及重复重绘 |
 | `cnc_present_test.bat` | 三后端实际屏幕像素、复制/清除/翻页；2× 四个独立采样、非黑背景线性混合、2×→1× 调整、无边框与独占全屏；无 cnc-ddraw/关闭选项回退 |
+| CTest `cpu_loading_text` | 无 GPU 呈现器时登记内存文字目标，保留独立 2× 采样；复制到 DirectDraw 目标、失败复制回滚、100 次重绘、清除、销毁与地址复用 |
 | `takeover_test.bat` | 逐字回退的颜色、AA、裁剪、未锁定拒绝、缺字拒绝和吞吐 |
 | `hooktest_draw.bat --mode draw` | 返回跳板、ESP/EAX 和拒绝路径；支持 off/observe/draw 模式检查 |
 | `python tools\verify_dll.py` | x86 DLL、15 条钩子记录、导出、重定位、无 Phobos/Ares 普通或延迟导入，以及本机 Phobos hook 区间不交叠 |
@@ -328,6 +340,9 @@ cmake --build --preset deploy
 单独比较参数时修改该 QA 目录的 INI，并在该目录运行
 `render_quality.exe comparison.bmp --check --line`；加 `--scene` 使用纹理背景。
 各次运行独立初始化配置和缓存，不修改游戏目录 INI。
+`loading-2x.bmp` 使用独立 2× 字形绘制加载标题和两行任务目标，不经过先画 1× 再放大的过程。
+手动生成可运行 `render_quality.exe loading-2x.bmp --check --line --bgra --loading --hidpi`。
+该预览验证字形和文字合成，不模拟最终世界层滤镜；实际游戏以桌面截图检查。
 
 游戏目录的 `VectorText.log` 中，`LINE ready` 表示计划成功，`LINE fallback` 表示整行回退，
 `LINE native icon` 表示位图图标混排，`DYNAMIC width` 表示动态框测量适配命中。

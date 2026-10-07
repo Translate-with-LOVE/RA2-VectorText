@@ -47,48 +47,47 @@ cmake --build --preset deploy
 ## 配置参数
 
 所有参数放在游戏目录 `VectorText.ini` 的 `[VectorText]` 节下，修改后重启游戏生效。
-**缺省值**表示代码在该项缺失时使用的值；**示例值**来自仓库的 [VectorText.ini](VectorText.ini)，两者并不总是相同。
-布尔值不区分大小写，支持 `true/false`、`yes/no`、`on/off` 和 `1/0`。布尔项缺失或无效时使用缺省值；整数、浮点数和枚举按各自规则解析。
+**默认值**表示代码在该项缺失时使用的值。完整配置文件见 [VectorText.ini](VectorText.ini)。
+布尔值不区分大小写，支持 `true/false`、`yes/no`、`on/off` 和 `1/0`。布尔项缺失或无效时使用默认值；整数、浮点数和枚举按各自规则解析。
 字号、基线及边距使用游戏逻辑像素；HiDPI 在输出时按实际倍率栅格化，不改变文字的视觉尺寸。
 
-| 参数 | 缺省值 | 示例值 | 作用与取值 |
-| --- | --- | --- | --- |
-| `Enabled` | `true` | `true` | 控制日志和 32 位呈现启动。关闭全部矢量接管应使用 `Mode=off`，仅设为 `false` 不会关闭 RGB565 绘制。 |
-| `Mode` | `observe` | `draw` | `off` 使用原生文字；`observe` 仅观测；`draw` 矢量绘制。不区分大小写，未知值按 `observe` 处理。 |
-| `LineRender` | `false` | `true` | 单行自然排版，统一计算字距、kerning 和标点间距。需 `Mode=draw`，且不能使用 `Metrics=vector` 或大于 1 的 `AdvanceScale`；关闭时逐字绘制。 |
-| `LegacyCodepage1252` | `true` | `true` | 将 `U+0080～U+009F` 中 27 个旧码位按 Windows-1252 映射为 Unicode 字形；`false` 严格按原始 Unicode 解释。不修改 CSF 或正确的 Unicode 字符。 |
-| `Present32` | `true` | `true` | 检测 cnc-ddraw，在 BGRA8 呈现阶段合成文字，提高抗锯齿边缘的颜色精度。关闭、无 cnc-ddraw 或接入失败时使用 RGB565。 |
-| `HiDPI` | `true` | `true` | 在 `Present32` 路径下，D3D9 实际等比 2× 输出时直接栅格化双倍分辨率文字；1×、其他倍率或后端保留 1× 路径。`false` 关闭自动 2× 文字。 |
-| `DynamicTextWidth` | `true` | `true` | 单行布局启用时，按自然文字宽度调整加载目标框、任务消息、tooltip 和侧栏状态背景；同时处理相应墨迹高度与内边距。关闭时保留原矩形度量。 |
-| `LineWidthPadding` | `4` | `4` | 自然宽度测量的额外余量，限制为 1～32px。任务消息左右合计至少留 4px；tooltip 还会添加原生内边距。 |
-| `Metrics` | `scaled` | `game` | 逐字路径的度量策略：`game` 使用原字宽；`scaled` 使用原字宽乘 `AdvanceScale`；`vector` 使用矢量字体字宽。后两者可能改写游戏字宽并改变布局；推荐 `game` 配合单行排版。 |
-| `AdvanceScale` | `1.05` | `1.0` | 仅 `Metrics=scaled` 时生效的原字宽倍率，限制为 1.0～2.0。大于 1 时停用自然单行排版。 |
-| `FitToAdvance` | `true` | `true` | 逐字路径按指定字宽限制字形，避免溢出旧字格；自然单行布局保留字体比例。`Metrics=vector` 不启用此限制。 |
-| `FontFile` | `C:\Windows\Fonts\NotoSerifSC-VF.ttf` | `C:\Windows\Fonts\NotoSansSC-VF.ttf` | 主字体文件路径，用于中文及相应标点；未指定独立英文字体时也用于英文。文件需在本机存在。 |
-| `FontFileLatin` | 空 | `C:\Windows\Fonts\arial.ttf` | 独立英文、数字及常用半角符号字体；为空或加载失败时使用主字体。 |
-| `FontWeight` | `400` | `450` | 可变字体的 `wght` 字重轴值，字体需支持该轴。固定字体的字重由文件决定，不会据此改变 Arial 常规体。 |
-| `FontSizeLatin` | `13` | `13` | 英文字体字号，最小 6px。HiDPI 2× 输出时以双倍像素字号栅格化。 |
-| `FontSizeCJK` | `16` | `16` | 中文及相应标点字号，最小 6px。与英文独立设置，共享基线。 |
-| `BaselineRow` | `13` | `13` | 相对游戏传入 Y 的共同基线位置，限制为 1～32；增大会整体下移文字，不会逐字按轮廓对齐。 |
-| `Supersample` | `2` | `1` | 1～4 倍栅格化后降采样；`1` 直接在目标像素网格栅格化。较高值会改变 hinting 网格并增加开销，与 HiDPI 输出倍率是独立选项。 |
-| `Hinting` | `0` | `0` | 灰度栅格对齐：`0` 轻量纵向对齐（LIGHT），`1` 完整对齐（NORMAL），`2` 不对齐；其他值回到 LIGHT。关闭抗锯齿时使用 MONO。 |
-| `Subpixel` | `true` | `true` | 字形使用四分之一像素 X 相位；`false` 将可见原点取最近整数像素。自然单行布局的字距和测量仍保留小数。不是 RGB 子像素彩色抗锯齿。 |
-| `AntiAlias` | `true` | `true` | 启用灰度抗锯齿；`false` 使用单色字形，灰度混合及描边选项不生效。 |
-| `Gamma` | `1.0` | `1.00` | 调整灰度覆盖率，限制为 0.5～3.0；`1` 保持原覆盖率，大于 1 会加重边缘，小于 1 会减弱边缘。 |
-| `StemDarkening` | `0` | `0` | `0` 关闭；正数尝试启用 FreeType 自动 hinting 的笔画加粗属性。当前不是可调加粗量，效果取决于字体及实际使用的驱动。 |
-| `LinearBlend` | `true` | `true` | 在线性光空间混合文字和背景，避免直接在 sRGB 数值中混合造成边缘过暗；RGB565 与 BGRA8 路径均使用。 |
-| `Dither` | `true` | `false` | RGB565 回写时对量化阈值加入轻微 Bayer 抖动，减轻色阶；BGRA8 最终文字合成不需要该抖动。 |
-| `Outline` | `0` | `0` | 灰度文字描边，`0` 关闭，非零开启；值限制为 0～2。描边需 `AntiAlias=true`。 |
-| `OutlineColor` | `0x0000` | `0x0000` | 描边颜色，按 16 位 RGB565 色值解析；支持十六进制，`0x0000` 为黑色。仅开启描边时生效。 |
-| `Detailed` | `true` | `false` | 收集独特字符串和详细调用信息；关闭时以计数统计为主，减少动态金额、计时文本持续建表和写盘的开销。 |
-| `LogBitFontBlitDetails` | `false` | 未设置 | 逐字 Blit 详细日志，需同时启用 `Enabled` 和 `Detailed`；正常游戏建议关闭。 |
-| `MaxUniqueStrings` | `4000` | 未设置 | 详细日志收集的独特字符串数量上限，最小 16；达到上限后继续累计调用统计，不再加入新字符串。 |
-| `FlushIntervalMs` | `2000` | 未设置 | 调用过程中写入统计摘要的间隔，单位毫秒，最小 250；不是每次字符绘制的写盘间隔。 |
-| `LogFileName` | `VectorText.log` | 未设置 | 相对游戏目录的日志文件名，启动时重建日志。 |
-| `Probe` | `true` | `true` | 对首次使用的 BitFont 对象记录布局探针，帮助检查字体、表面、pitch 和裁剪框。 |
-| `PresentProfile` | `false` | `false` | 32 位呈现路径每 300 帧记录绘字、复制、上传和叠加的 CPU 耗时。诊断性能时临时开启；不是 GPU 完成时间或整局 FPS。 |
+| 参数 | 默认值 | 作用与取值 |
+| --- | --- | --- |
+| `Enabled` | `true` | 控制日志和 32 位呈现启动。关闭全部矢量接管应使用 `Mode=off`，仅设为 `false` 不会关闭 RGB565 绘制。 |
+| `Mode` | `observe` | `off` 使用原生文字；`observe` 仅观测；`draw` 矢量绘制。不区分大小写，未知值按 `observe` 处理。 |
+| `LineRender` | `false` | 单行自然排版，统一计算字距、kerning 和标点间距。需 `Mode=draw`，且不能使用 `Metrics=vector` 或大于 1 的 `AdvanceScale`；关闭时逐字绘制。 |
+| `LegacyCodepage1252` | `true` | 将 `U+0080～U+009F` 中 27 个旧码位按 Windows-1252 映射为 Unicode 字形；`false` 严格按原始 Unicode 解释。不修改 CSF 或正确的 Unicode 字符。 |
+| `Present32` | `true` | 检测 cnc-ddraw，在 BGRA8 呈现阶段合成文字，提高抗锯齿边缘的颜色精度。关闭、无 cnc-ddraw 或接入失败时使用 RGB565。 |
+| `HiDPI` | `true` | 在 `Present32` 路径下，D3D9 实际等比 2× 输出时直接栅格化双倍分辨率文字；1×、其他倍率或后端保留 1× 路径。`false` 关闭自动 2× 文字。 |
+| `DynamicTextWidth` | `true` | 单行布局启用时，按自然文字宽度调整加载目标框、任务消息、tooltip 和侧栏状态背景；同时处理相应墨迹高度与内边距。关闭时保留原矩形度量。 |
+| `LineWidthPadding` | `4` | 自然宽度测量的额外余量，限制为 1～32px。任务消息左右合计至少留 4px；tooltip 还会添加原生内边距。 |
+| `Metrics` | `scaled` | 逐字路径的度量策略：`game` 使用原字宽；`scaled` 使用原字宽乘 `AdvanceScale`；`vector` 使用矢量字体字宽。后两者可能改写游戏字宽并改变布局；推荐 `game` 配合单行排版。 |
+| `AdvanceScale` | `1.05` | 仅 `Metrics=scaled` 时生效的原字宽倍率，限制为 1.0～2.0。大于 1 时停用自然单行排版。 |
+| `FitToAdvance` | `true` | 逐字路径按指定字宽限制字形，避免溢出旧字格；自然单行布局保留字体比例。`Metrics=vector` 不启用此限制。 |
+| `FontFile` | `C:\Windows\Fonts\NotoSerifSC-VF.ttf` | 主字体文件路径，用于中文及相应标点；未指定独立英文字体时也用于英文。文件需在本机存在。 |
+| `FontFileLatin` | 空 | 独立英文、数字及常用半角符号字体；为空或加载失败时使用主字体。 |
+| `FontWeight` | `400` | 可变字体的 `wght` 字重轴值，字体需支持该轴。固定字体的字重由文件决定，不会据此改变 Arial 常规体。 |
+| `FontSizeLatin` | `13` | 英文字体字号，最小 6px。HiDPI 2× 输出时以双倍像素字号栅格化。 |
+| `FontSizeCJK` | `16` | 中文及相应标点字号，最小 6px。与英文独立设置，共享基线。 |
+| `BaselineRow` | `13` | 相对游戏传入 Y 的共同基线位置，限制为 1～32；增大会整体下移文字，不会逐字按轮廓对齐。 |
+| `Supersample` | `2` | 1～4 倍栅格化后降采样；`1` 直接在目标像素网格栅格化。较高值会改变 hinting 网格并增加开销，与 HiDPI 输出倍率是独立选项。 |
+| `Hinting` | `0` | 灰度栅格对齐：`0` 轻量纵向对齐（LIGHT），`1` 完整对齐（NORMAL），`2` 不对齐；其他值回到 LIGHT。关闭抗锯齿时使用 MONO。 |
+| `Subpixel` | `true` | 字形使用四分之一像素 X 相位；`false` 将可见原点取最近整数像素。自然单行布局的字距和测量仍保留小数。不是 RGB 子像素彩色抗锯齿。 |
+| `AntiAlias` | `true` | 启用灰度抗锯齿；`false` 使用单色字形，灰度混合及描边选项不生效。 |
+| `Gamma` | `1.0` | 调整灰度覆盖率，限制为 0.5～3.0；`1` 保持原覆盖率，大于 1 会加重边缘，小于 1 会减弱边缘。 |
+| `StemDarkening` | `0` | `0` 关闭；正数尝试启用 FreeType 自动 hinting 的笔画加粗属性。当前不是可调加粗量，效果取决于字体及实际使用的驱动。 |
+| `LinearBlend` | `true` | 在线性光空间混合文字和背景，避免直接在 sRGB 数值中混合造成边缘过暗；RGB565 与 BGRA8 路径均使用。 |
+| `Dither` | `true` | RGB565 回写时对量化阈值加入轻微 Bayer 抖动，减轻色阶；BGRA8 最终文字合成不需要该抖动。 |
+| `Outline` | `0` | 灰度文字描边，`0` 关闭，非零开启；值限制为 0～2。描边需 `AntiAlias=true`。 |
+| `OutlineColor` | `0x0000` | 描边颜色，按 16 位 RGB565 色值解析；支持十六进制，`0x0000` 为黑色。仅开启描边时生效。 |
+| `Detailed` | `true` | 收集独特字符串和详细调用信息；关闭时以计数统计为主，减少动态金额、计时文本持续建表和写盘的开销。 |
+| `LogBitFontBlitDetails` | `false` | 逐字 Blit 详细日志，需同时启用 `Enabled` 和 `Detailed`；正常游戏建议关闭。 |
+| `MaxUniqueStrings` | `4000` | 详细日志收集的独特字符串数量上限，最小 16；达到上限后继续累计调用统计，不再加入新字符串。 |
+| `FlushIntervalMs` | `2000` | 调用过程中写入统计摘要的间隔，单位毫秒，最小 250；不是每次字符绘制的写盘间隔。 |
+| `LogFileName` | `VectorText.log` | 相对游戏目录的日志文件名，启动时重建日志。 |
+| `Probe` | `true` | 对首次使用的 BitFont 对象记录布局探针，帮助检查字体、表面、pitch 和裁剪框。 |
+| `PresentProfile` | `false` | 32 位呈现路径每 300 帧记录绘字、复制、上传和叠加的 CPU 耗时。诊断性能时临时开启；不是 GPU 完成时间或整局 FPS。 |
 
-示例采用思源黑体 16px / 字重 450、Arial 13px、共同基线 13，以及目标尺寸灰度抗锯齿。
 过长单行先收紧空白，再最多等比缩至 90%；仍无法容纳时整行回退，不横向强制拉伸。
 `PresentTextScale`、旧模式 `aa/swap` 及无实际作用的 `FitMode`、`ClassAlign`、`FallbackOnError`、`MetricsExcept` 已移除，不应加入新配置。
 配置边界、回退规则和 hook 约定见 [最终渲染说明](docs/rendering.md)。
@@ -101,7 +100,7 @@ cmake --build --preset deploy
 | --- | --- |
 | `line_test.bat` | 单行布局、混排、宽度、对齐、显现、线程隔离；真实游戏测量机器码及已安装 DLL hook；本机 Phobos 背景处理机器码的透明度与回退；无 Phobos/Ares 的图标计数器 |
 | `baseline_test.bat` | 与 FreeType 独立固定基线位图比较，验证中英文、数字、符号、相位、缩放及裁剪 |
-| `render_quality_test.bat` | 当前生产配置的黑底和纹理背景预览，以及覆盖率、缓存、度量与字体数据检查 |
+| `render_quality_test.bat` | 当前生产配置的黑底、纹理背景和加载界面 2× 字形预览，以及覆盖率、缓存、度量与字体数据检查 |
 | `present32_test.bat` | 32 位覆盖率精度、稀疏文字层、裁剪、复制、拉伸及重复重绘 |
 | `cnc_present_test.bat` | 三后端实际像素、复制、翻页、清除；2× 独立采样与线性混合、切回 1×、无边框/独占全屏及关闭选项回退 |
 | `takeover_test.bat` | 单行拒绝后的逐字接管、颜色、抗锯齿、裁剪和缺字回退 |
@@ -110,9 +109,12 @@ cmake --build --preset deploy
 | `python tools\verify_dll.py` | DLL 导出、15 条钩子记录、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
 
 预览图输出到 `build/render-qa/`。离线通过仍需结合实际游戏画面验收。
-当前 19 项离线 CTest 通过；实际显示测试仍有两项 D3D9 屏幕像素采样失败，原因待核实，不能视为全后端验收通过。
+当前 21 项离线 CTest 通过，包含加载界面内存表面的文字复制、重复重绘和销毁复用；实际显示测试仍有两项 D3D9 屏幕像素采样失败，原因待核实，不能视为全后端验收通过。
 游戏目录的 `VectorText.log` 记录 `LINE ready`、`LINE fallback`、`LINE native icon`
 和 `DYNAMIC width`，可确认实际调用是否命中。
+加载界面的原生 `BSurface` 内存目标也接入高精度文字层，复制到显示表面时保留独立的 2× 采样。
+`output text scale=2` 只说明呈现器启用了 2×，不能证明所有绘字目标均已接管；
+`CPU text surface registered ... hi-raster=1` 可确认加载内存表面已登记。最终效果仍需重启游戏后检查。
 
 保留的诊断工具：`tools/analyze_log.py` 汇总实际日志，`tools/find_callers.py` 扫描游戏原生调用点，
 `tools/screenshot_diff.py` 比较同一静态画面的截图。各工具支持 `--help`。

@@ -144,6 +144,8 @@ if(BUILD_TESTING)
     vt_check(quality_bgra render_quality bgra-after.bmp --check --line --bgra)
     vt_check(quality_bgra_scene render_quality bgra-scene.bmp --check --line --scene --bgra)
     vt_check(quality_guides render_quality bgra-guides.bmp --check --line --bgra --guides)
+    vt_check(quality_loading_2x render_quality loading-2x.bmp --check --line --bgra --loading --hidpi)
+    vt_check(cpu_loading_text cnc_present_test --cpu-text)
     # These checks need an interactive desktop; the offline preset excludes them.
     add_test(NAME cnc_display COMMAND cmd /c "${CMAKE_CURRENT_SOURCE_DIR}/cnc_present_test.bat")
     set_tests_properties(cnc_display PROPERTIES LABELS display RUN_SERIAL TRUE)

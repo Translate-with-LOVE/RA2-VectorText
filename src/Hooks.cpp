@@ -13,6 +13,7 @@
 
 #include "SyringeABI.h"
 #include "YRAddresses.h"
+#include "Presentation32.h"
 #include "Logger.h"
 #include "Takeover.h"
 #include "PixelWriter.h"
@@ -434,7 +435,7 @@ VT_DEFINE_HOOK(yra::Message_Background, VT_Hook_Message_Background, yra::Message
 // ---------------------------------------------------------------------------
 // Drawing::PrintUnicode  @ 0x4A61C0   (48 direct call sites -> main text API)
 //   Log evidence: the string is the second stack argument (esp+8) in 203 of
-//   205 first-seen calls; esp+4 is the destination/surface-ish argument.
+//   205 first-seen calls; esp+4 is output Point2D*, esp+C is Surface*.
 // ---------------------------------------------------------------------------
 VT_DEFINE_HOOK(yra::Drawing_PrintUnicode, VT_Hook_Drawing_PrintUnicode,
                yra::Drawing_PrintUnicodeSz)
@@ -536,6 +537,10 @@ VT_DEFINE_HOOK(yra::BitFont_DimensionDone, VT_Hook_BitFont_DimensionDone, yra::B
 // +10..=X,Y,W,H. This observation hook leaves the original call intact.
 VT_DEFINE_HOOK(yra::BitText_Print, VT_Hook_BitText_Print, yra::BitText_PrintSz)
 {
+    if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw) {
+        __try { vt::Presentation32::TrackTextSurface((void*)(uintptr_t)R->Stack32(8)); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { vt::Takeover::NoteException(); }
+    }
     TextArg arg;
     arg.ptr     = (const wchar_t*)(uintptr_t)R->Stack32(0xC);
     arg.offset  = 0xC;
@@ -551,6 +556,10 @@ VT_DEFINE_HOOK(yra::BitText_Print, VT_Hook_BitText_Print, yra::BitText_PrintSz)
 // ---------------------------------------------------------------------------
 VT_DEFINE_HOOK(yra::BitText_DrawText, VT_Hook_BitText_DrawText, yra::BitText_DrawTextSz)
 {
+    if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw) {
+        __try { vt::Presentation32::TrackTextSurface((void*)(uintptr_t)R->Stack32(8)); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { vt::Takeover::NoteException(); }
+    }
     if (R->Stack32(0) == 0x00479041u)
     {
         const TooltipLayout pending = t_tooltip;

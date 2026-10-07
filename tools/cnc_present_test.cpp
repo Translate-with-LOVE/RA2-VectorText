@@ -45,6 +45,24 @@ static bool __fastcall CpuCopy(void* object,const int* dr,void* source,const int
     dest->Unlock(nullptr); if(src) src->Unlock(nullptr); return true;
 }
 static int __fastcall CpuPitch(void* source,void*) { return ((int*)source)[1]*2; }
+struct OfflineDDS { void** table; unsigned short* pixels; int width,height; };
+static HRESULT WINAPI OfflineDesc(void* object,DDSURFACEDESC2* d) {
+    const auto& s=*(OfflineDDS*)object;
+    *d={};d->dwSize=sizeof(*d);d->dwWidth=s.width;d->dwHeight=s.height;
+    d->lPitch=s.width*2;d->lpSurface=s.pixels;
+    d->ddpfPixelFormat.dwRGBBitCount=16;d->ddpfPixelFormat.dwRBitMask=0xF800;
+    d->ddpfPixelFormat.dwGBitMask=0x7E0;d->ddpfPixelFormat.dwBBitMask=0x1F;
+    return S_OK;
+}
+static bool __fastcall OfflineCopy(void* dest,const int* dr,void* source,const int* sr,
+                                  void*,int,int,int,int) {
+    auto* d=*(OfflineDDS**)((char*)dest+0x1C);
+    const auto* pixels=*(unsigned short**)((char*)source+0x14);
+    const int width=((int*)source)[1];
+    for(int y=0;y<dr[3];++y) for(int x=0;x<dr[2];++x)
+        d->pixels[(dr[1]+y)*d->width+dr[0]+x]=pixels[(sr[1]+y)*width+sr[0]+x];
+    return true;
+}
 static bool __fastcall FailedCopy(void*,const int*,void*,const int*,void*,int,int,int,int) { return false; }
 static void GameSurface(unsigned char* memory,void** table,LPDIRECTDRAWSURFACE surface) {
     table[33]=(void*)0x4C1AB0;
@@ -84,6 +102,67 @@ static void Check(bool ok,const char* message) {
 }
 int main(int argc,char** argv) {
     FILE* report=fopen("cnc-qa.txt","w");if(report)fclose(report);
+    if(argc>1 && !strcmp(argv[1],"--cpu-text")) {
+        // Offline loading-surface regression: no window, GPU, cnc-ddraw or
+        // Phobos is needed. Use the real registration/writer/erasure helpers.
+        vt::Presentation32::TestCpuTextStart();
+        unsigned char object[0x24]{};void* table[34]{};
+        unsigned short memory[32*24]{};
+        table[29]=(void*)CpuPitch;*(void***)object=table;
+        ((int*)object)[1]=32;((int*)object)[2]=24;((int*)object)[4]=2;
+        *(void**)(object+0x14)=memory;
+        vt::GlyphCell glyph{};glyph.inkRows=1;glyph.cov[0]=128;
+        vt::GlyphRaster2 hi;hi.width=2;hi.rows=2;hi.coverage={16,80,160,240};glyph.raster2=&hi;
+        vt::Target target{memory,32,0,0,31,23};
+        unsigned int first[64*48]{},again[64*48]{};
+        vt::Presentation32::TestCpuTextTrack(object);
+        vt::DrawCellAA(target,glyph,4,4,1,0xFFFF,vt::RGB565);
+        Check(vt::Presentation32::Stats().glyphs==1,"CPU loading text retained before backend activation");
+        Check(vt::Presentation32::TestCpuTextOverlay(object,first,64),"CPU loading sidecar available");
+        bool high=true;
+        for(int i=0;i<4;++i) high=high && (first[(8+i/2)*64+8+i%2]>>24)==hi.coverage[i];
+        Check(high,"loading retains four independent output-grid coverages");
+        for(int n=0;n<100;++n) {
+            vt::Presentation32::TestCpuTextTrack(object);
+            vt::DrawCellAA(target,glyph,4,4,1,0xFFFF,vt::RGB565);
+        }
+        vt::Presentation32::TestCpuTextOverlay(object,again,64);
+        Check(!memcmp(first,again,sizeof(first)),"loading redraw does not darken or accumulate edges");
+        unsigned char screen[0x24]{};void* screenTable[34]{},*ddsTable[34]{};
+        unsigned short screenPixels[32*24]{};
+        ddsTable[22]=(void*)OfflineDesc;OfflineDDS dds{ddsTable,screenPixels,32,24};
+        screenTable[33]=(void*)0x4C1AB0;*(void***)screen=screenTable;
+        *(void**)(screen+0x1C)=&dds;
+        const int rect[]{0,0,32,24};uintptr_t opaque=0x7F7BC4;
+        Check(vt::Presentation32::TestGameCopy(screen,rect,object,rect,&opaque,OfflineCopy),
+            "loading BSurface copied through native software-copy hook");
+        Check(vt::Presentation32::TestCpuTextOverlay(screen,again,64) && !memcmp(first,again,sizeof(first)),
+            "BSurface to DSurface copy preserves independent 2x text");
+        Check(!vt::Presentation32::TestGameCopy(screen,rect,object,rect,&opaque,FailedCopy),
+            "failed loading copy returns failure");
+        vt::Presentation32::TestCpuTextOverlay(screen,again,64);
+        Check(!memcmp(first,again,sizeof(first)),"failed loading copy restores screen sidecar");
+        memset(memory,0,sizeof(memory));
+        vt::Presentation32::TestCpuTextOverlay(object,again,64);
+        bool clear=true;for(auto p:again) clear=clear && !p;
+        Check(clear,"native BSurface background restore erases low and high samples");
+        vt::Presentation32::TestCpuTextRelease(object);
+        Check(!vt::Presentation32::TestCpuTextOverlay(object,again,64),"BSurface destruction removes sidecar");
+        vt::Presentation32::TestCpuTextTrack(object);
+        vt::Presentation32::TestCpuTextOverlay(object,again,64);
+        clear=true;for(auto p:again) clear=clear && !p;
+        Check(clear,"reused BSurface object and allocation do not retain previous loading text");
+        unsigned short replacement[32*24]{};
+        *(void**)(object+0x14)=replacement;
+        vt::Presentation32::TestCpuTextTrack(object);
+        target.base=replacement;
+        vt::DrawCellAA(target,glyph,4,4,1,0xFFFF,vt::RGB565);
+        vt::Presentation32::TestCpuTextOverlay(object,again,64);
+        Check(!memcmp(first,again,sizeof(first)),"BSurface buffer change creates a fresh sidecar");
+        vt::Presentation32::TestCpuTextRelease(object);
+        vt::SetPresentationWriter(nullptr);
+        printf("CPU text: %s\n",errors?"FAIL":"PASS");return errors?1:0;
+    }
     const bool perf2=argc>1 && !strcmp(argv[1],"--perf-2x");
     const bool compat2=argc>1 && !strcmp(argv[1],"--compat-2x");
     const bool output2=argc>1 && (!strcmp(argv[1],"--2x") || compat2 || perf2);

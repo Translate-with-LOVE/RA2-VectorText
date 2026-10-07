@@ -30,6 +30,7 @@ namespace vt { namespace Presentation32 { namespace {
     struct Buffer {
         unsigned short* base; int width, height, pitch;
         PixelPlane plane;
+        bool cpuText = false;
         Buffer(const DDSURFACEDESC2& d, PlaneOptions options) :
             base((unsigned short*)d.lpSurface), width((int)d.dwWidth), height((int)d.dwHeight),
             pitch(d.lPitch / 2), plane(width, height, options) {}
@@ -59,12 +60,14 @@ namespace vt { namespace Presentation32 { namespace {
         std::vector<Slot> slots;
         std::map<void*, Surface> surfaces;
         std::map<void*, std::shared_ptr<Buffer>> buffers;
+        std::map<void*, std::shared_ptr<Buffer>> cpuTextSurfaces;
         std::map<void*, Texture> textures;
         PlaneOptions options;
         void* primary = nullptr;
         Statistics stats{};
         bool enabled = false;
         bool autoTextScale = false;
+        bool cpuTextReady = false;
         bool profile = false;
         LARGE_INTEGER frequency{};
 #ifdef VT_PRESENT_TEST
@@ -159,6 +162,42 @@ namespace vt { namespace Presentation32 { namespace {
         d={}; d.dwSize=sizeof(d); d.dwWidth=width; d.dwHeight=height;
         d.lPitch=pitch; d.lpSurface=*(void**)((char*)object+0x14);
         return true;
+    }
+    void ForgetCpuText(void* object) {
+        Guard guard;
+        auto found=state->cpuTextSurfaces.find(object);
+        if(found==state->cpuTextSurfaces.end()) return;
+        const auto buffer=state->buffers.find(found->second->base);
+        if(buffer!=state->buffers.end() && buffer->second==found->second)
+            state->buffers.erase(buffer);
+        state->cpuTextSurfaces.erase(found);
+    }
+    using CpuDelete = void* (__thiscall*)(void*,unsigned int);
+    CpuDelete realCpuDelete = nullptr;
+    void* __fastcall HookCpuDelete(void* object,void*,unsigned int flags) {
+        // Drop our sidecar while the native allocation is still alive. Never
+        // touch its buffer after the scalar deleting destructor has freed it.
+        ForgetCpuText(object);
+        return realCpuDelete(object,flags);
+    }
+    void TrackCpuText(void* object) {
+        DDSURFACEDESC2 d{};void* native=nullptr;
+        if(!GameDescription(object,d,native) || native) return;
+        Guard guard;
+        auto found=state->cpuTextSurfaces.find(object);
+        std::shared_ptr<Buffer> b=found!=state->cpuTextSurfaces.end() ? found->second : nullptr;
+        if(!b || b->base!=d.lpSurface || b->width!=(int)d.dwWidth ||
+            b->height!=(int)d.dwHeight || b->pitch!=d.lPitch/2) {
+            if(b) ForgetCpuText(object);
+            b=std::make_shared<Buffer>(d,state->options);b->cpuText=true;
+            state->cpuTextSurfaces[object]=b;state->buffers[d.lpSurface]=b;
+            Log::Note("Present32: CPU text surface registered object=%p base=%p size=%ux%u pitch=%ld hi-raster=%d",
+                object,d.lpSurface,d.dwWidth,d.dwHeight,d.lPitch/2,state->options.highResolution);
+        }
+        b->plane.ValidateNative(b->base,b->pitch);
+        // BSurface::Lock has no DirectDraw Lock hook. Each BitText call is a
+        // new paint boundary, so identical redraws replace old edge coverage.
+        b->plane.BeginWrite();
     }
     bool GameRects(const int* dr,const DDSURFACEDESC2& dd,const int* sr,const DDSURFACEDESC2& sd,
                    PixelRect& dest,PixelRect& source) {
@@ -255,9 +294,12 @@ namespace vt { namespace Presentation32 { namespace {
              unsigned short color, bool aa) {
         if (!state || !state->enabled || !t.base) return -1;
         Guard guard;
-        if (!state->stats.backend || aa != state->options.antialias) return -1;
+        if (aa != state->options.antialias) return -1;
         const auto found = state->buffers.find(t.base);
         if (found == state->buffers.end() || found->second->pitch != t.pitch) return -1;
+        // The cached loading image can be painted before the first GPU upload.
+        // Its compatibility pixels remain available until a presenter is ready.
+        if (!state->stats.backend && !found->second->cpuText) return -1;
         const auto start=Stamp();
         found->second->plane.Paint(cell, x, y, rows, color,
             {t.clipL,t.clipT,t.clipR + 1,t.clipB + 1},found->second->base,found->second->pitch);
@@ -920,6 +962,15 @@ namespace vt { namespace Presentation32 { namespace {
                 Log::Note("Present32: native fill/copy entry differs; retaining RGB565");
                 return;
             }
+            // Loading constructs a BSurface (vtable 7E2070) at 552D94..552DCD,
+            // stores it at loading-object+60 and deletes it through vtable[0]
+            // at 5543EC..5543F7. Scope this optional hook to that verified type.
+            const unsigned char deletePrefix[]={0x56,0x8B,0xF1,0x8D,0x4E,0x14};
+            if(*(uintptr_t*)0x7E2070==0x411650 &&
+                !memcmp((void*)0x411650,deletePrefix,sizeof(deletePrefix)) &&
+                MH_CreateHook((void*)0x411650,(void*)HookCpuDelete,(void**)&realCpuDelete)==MH_OK &&
+                MH_QueueEnableHook((void*)0x411650)==MH_OK) state->cpuTextReady=true;
+            else Log::Note("Present32: BSurface lifetime hook unavailable; CPU text retains RGB565");
         }
         HMODULE ogl=LoadLibraryW(L"opengl32.dll");
         if (ogl) {
@@ -998,11 +1049,37 @@ namespace vt { namespace Presentation32 { namespace {
             }
         }
     }
+    void TrackTextSurface(void* surface) {
+        if(!state || !state->enabled || !state->cpuTextReady || !surface) return;
+        // Only the verified native BSurface class owns this memory layout.
+        // All DSurface and extension surface paths keep their existing hooks.
+        if(*(uintptr_t*)surface!=0x7E2070) return;
+        TrackCpuText(surface);
+    }
     Statistics Stats() {
         if (!state) return {};
         Guard guard; return state->stats;
     }
 #ifdef VT_PRESENT_TEST
+    void TestCpuTextStart() {
+        state=new State();state->enabled=true;state->cpuTextReady=true;
+        state->options.highResolution=true;
+        // Deliberately leave backend=0: loading can precede texture creation.
+        SetPresentationWriter(Draw);
+    }
+    void TestCpuTextTrack(void* surface) { TrackCpuText(surface); }
+    void TestCpuTextRelease(void* surface) { ForgetCpuText(surface); }
+    bool TestCpuTextOverlay(void* surface,unsigned int* output,int pitch) {
+        DDSURFACEDESC2 d{};void* native=nullptr;
+        if(!GameDescription(surface,d,native)) return false;
+        Guard guard;
+        const auto found=state->buffers.find(d.lpSurface);
+        if(found==state->buffers.end()) return false;
+        auto& b=*found->second;
+        b.plane.ValidateNative(b.base,b.pitch);
+        b.plane.Overlay2Rect(output,pitch,{0,0,b.width,b.height});
+        return true;
+    }
     unsigned int TestPixel(int x,int y) {
         if (!state) return 0;
         Guard guard;

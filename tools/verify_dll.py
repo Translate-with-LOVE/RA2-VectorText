@@ -60,7 +60,11 @@ def check_native_raster(path):
           % ('OK' if ok else 'DIFFER -- Present32 will fall back'))
     print('native message background: 0x623A97 setup before Phobos fill %s' %
           ('OK' if read(0x623A97, 8) == bytes.fromhex('89 54 24 30 8D 44 24 30') else 'DIFFER'))
-    return ok
+    cpu_ok = (read(0x7E2070, 4) == struct.pack('<I', 0x411650) and
+              read(0x411650, 6) == bytes.fromhex('56 8B F1 8D 4E 14'))
+    print('native BSurface lifetime: 0x411650 vtable/prefix %s' %
+          ('OK' if cpu_ok else 'DIFFER -- CPU text retains RGB565'))
+    return ok and cpu_ok
 
 
 def check_phobos_overlap(path, records):
@@ -225,7 +229,12 @@ def main():
         print('   (%d records in %s)' % (count, name))
 
     ok = check_native_raster(path) and ok
-    ok = check_phobos_overlap(path, records) and ok
+    # MinHook consumes complete instructions until at least five bytes are
+    # available. These native detours are not Syringe section records.
+    native_records = [(0x4BB620, 6, 'DSurface::FillRectEx'),
+                      (0x437350, 7, 'XSurface CPU copy'),
+                      (0x411650, 6, 'BSurface deleting destructor')]
+    ok = check_phobos_overlap(path, records + native_records) and ok
     print('\nresult    : %s' % ('OK -- ready for Syringe' if ok else 'PROBLEMS FOUND'))
     return 0 if ok else 1
 
