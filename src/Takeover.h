@@ -9,13 +9,14 @@
 //  Takeover -- replaces the *glyph pixels* the engine draws, one glyph at a
 //  time, by hooking BitFont::Blit (0x434120).
 //
-//  Why per-glyph and not per-string:
-//    * the engine keeps doing layout, wrapping, alignment, clipping, shadows
-//      and the per-character `reveal` colour ramp -> zero risk of drift;
+//  Optional LineRender precomputes natural X positions at verified row starts.
+//  The engine keeps selecting row ranges/Y, shadow passes and reveal colours.
+//  Without a valid line plan, the existing per-glyph rendering is the fallback:
 //    * BitFont::Lock has already run, so the locked 16-bit surface and its
 //      pitch are simply read from the BitFont object (no Surface guesswork);
 //    * the function's return value is the next pen X, so we return
-//      X + <original advance> and the layout stays byte-identical.
+//      X + <original advance>; a line plan also retains the engine's +0x2C
+//      tracking so its string loop and wrapping remain internally consistent.
 //  We only ever *write* pixels ourselves -- the M1 plan B requirement.
 // ===========================================================================
 
@@ -31,6 +32,26 @@ namespace vt
         // font's current colour" (BitFont+0x24).
         // On success, *newX = x + <advance of the original glyph>.
         bool TryBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg, int* newX);
+
+        // Prepare exactly the line selected by the engine. count=-1 reads a
+        // bounded NUL-terminated DrawString; otherwise count is an exclusive
+        // UTF-16 range selected by DrawText. gameX is its legacy pen origin.
+        // boxX/width/align describe the rich path's left/centre/right anchor.
+        bool BeginLine(void* bitFont, const wchar_t* text, int count, int gameX,
+                       int y, int boxX, int width, int align, unsigned int blitCaller, int scale1024 = 1024);
+        void SetLineBox(void* bitFont, const wchar_t* text, int gameX, int y,
+                        int boxX, int width, int align);
+        bool BeginStringLine(void* bitFont, const wchar_t* text, int count, int x, int y);
+        bool TryLineBlit(void* bitFont, unsigned int ch, int x, int y, int colorArg,
+                         unsigned int blitCaller, int* newX);
+        void EndLine(void* bitFont);
+        bool LineEnabled();
+        // Only dynamic UI boxes use this result; game wrapping/reveal counts
+        // retain their original metrics. Leaves an active draw plan untouched.
+        bool DynamicTextWidthEnabled();
+        bool MeasureDynamicWidth(void* bitFont, const wchar_t* text, int maxWidth, int* width);
+        struct LineInfo { int count, widthQ, originQ, consumed, boxWidth, mixedAddedQ, tightenedQ, scale1024; };
+        bool GetLineInfo(LineInfo* info);
 
         // Mode=swap: write our rasterised cell into the *game's own* glyph slot
         // in memory, then let the engine draw it.  No control flow, no stack

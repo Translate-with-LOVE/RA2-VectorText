@@ -24,6 +24,9 @@ namespace vt
         unsigned char width;                 // engine advance (pixels)
         unsigned char bits[3 * 32];          // strideBytes * lines, <= 96 bytes
         unsigned char cov[24 * 32];          // 8-bit coverage (only filled in AA mode)
+        int inkX;                            // natural glyph bearing, in pixels
+        int inkY, inkRows;                    // natural vertical bearing/height; 0 rows = legacy cell
+        int advanceQ, inkLeftQ, inkRightQ;   // quarter-pixel natural metrics
     };
 
     class GlyphSource
@@ -48,9 +51,8 @@ namespace vt
         // The CJK face stays on FontFile; no character proportions are changed.
         bool SetLatinFont(const char* path);
 
-        // When set, a glyph whose ink is wider than the engine advance is
-        // condensed horizontally to fit its cell (keeps layout identical and
-        // stops neighbouring CJK glyphs from touching).
+        // Uniformly fit an outline into an explicit engine advance. Natural
+        // line rendering passes -1 and retains the font's horizontal metrics.
         void SetFitToAdvance(bool on) { m_fit = on; }
 
         // AA mode also fills GlyphCell::cov with 8-bit coverage, which lets the
@@ -61,16 +63,21 @@ namespace vt
         // the intended cure for antialiased text looking too light at small sizes.
         void SetStemDarkening(int amount) { m_darkening = amount; }
 
-        // Supersampling factor (1 = off, 2 = rasterise at 2x and box-downsample).
-        // More accurate coverage at small sizes: cleaner edges, better weight.
+        // Supersampling factor (1 = target-size AA, 2/4 = box-downsample).
+        // Higher sampling improves outline fidelity, but hinting then uses the
+        // larger raster grid rather than the final small-text pixel grid.
         void SetSupersample(int ss);
+
+        // Grayscale grid fitting: 0=light (vertical), 1=normal, 2=unhinted.
+        // With Supersample=1, hinting works on the actual destination grid.
+        void SetHinting(int mode);
 
         // Fitting preserves proportions and happens on the outline before
         // rendering. Kept for compatibility with older INI files/tests.
         void SetFitMode(int mode) { m_fitMode = mode; }
 
-        // Legacy switch retained for callers. Glyphs share the font baseline;
-        // individual characters are never stretched or moved by their ink box.
+        // Legacy switch retained for callers. Natural line glyphs share one
+        // baseline; fixed engine slots still require compatibility fitting.
         void SetClassAlign(bool on) { m_classAlign = on; }
 
         bool Ready() const { return m_faceA != NULL; }
@@ -88,7 +95,11 @@ namespace vt
         // phase = signed horizontal subpixel shift in quarter pixels (-3..3); it is
         // baked into the rasterised coverage, so the engine can keep drawing at
         // integer positions while the ink lands on a fractional pen position.
-        const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0);
+        // engineSlot is only for copying a fixed 1bpp cell into game.fnt.
+        // Direct pixel drawing preserves vertical bearings for every script,
+        // even when horizontal fitting uses an explicit legacy advance.
+        const GlyphCell* Get(unsigned int codepoint, int gameAdvance, int phase = 0, int scale1024 = 1024, bool engineSlot = false);
+        int KerningQuarter(unsigned int left, unsigned int right);
 
         int  StrideBytes() const { return m_stride; }
         int  Lines() const { return m_lines; }
@@ -117,6 +128,7 @@ namespace vt
         bool  m_aa;
         int   m_darkening;
         int   m_ss;
+        int   m_hinting;
         int   m_fitMode;
         int   m_darkErr[3];
         bool  m_classAlign;

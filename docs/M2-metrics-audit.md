@@ -1,5 +1,7 @@
 # M2.1 度量审计（离线，基于 M0 日志里游戏真实的 maxW 约束）
 
+> 历史审计结果。近似度量脚本已删除；当前生产测宽和真实机器码回归见 [单行渲染说明](single-line-render.md)。
+
 工具：`tools/audit_metrics.py`（把日志里每条 `BitFont::GetTextDimension` 的原文与 `maxW`
 重放一遍，分别用"引擎自己的宽度字节"和"矢量 advance"累加，看是否超出调用者给出的上限）
 

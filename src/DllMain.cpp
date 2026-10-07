@@ -1,11 +1,9 @@
 // ===========================================================================
-//  VectorText M0 -- DLL entry point and (optional) Syringe handshake
+//  VectorText -- DLL entry point and (optional) Syringe handshake
 //
-//  Loading: this DLL is picked up by Syringe (the loader the Mental Omega
-//  client already uses for Ares/Phobos).  It registers its hooks through the
-//  ".syhks00" section emitted by VT_DEFINE_HOOK, so no .inj file is needed --
-//  the same mechanism Phobos uses.  Ares and Phobos load first and are
-//  unaffected: none of our hook addresses are used by them.
+//  Loading: Syringe reads the ".syhks00" section emitted by VT_DEFINE_HOOK;
+//  no .inj file is needed. All hooks target gamemd.exe 1.001's own text
+//  functions. Neither Phobos nor Ares is required for loading or rendering.
 // ===========================================================================
 
 #include "SyringeABI.h"
@@ -31,7 +29,7 @@ namespace
 // nothing is written from here except the status message Syringe prints.
 extern "C" __declspec(dllexport) HRESULT __cdecl SyringeHandshake(SyringeHandshakeInfo* pInfo)
 {
-    WriteMessage(pInfo, "VectorText M0: observing text hooks (no drawing changes).");
+    WriteMessage(pInfo, "VectorText: native text hooks and vector rendering.");
     return S_OK;
 }
 

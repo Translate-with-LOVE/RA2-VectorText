@@ -14,7 +14,7 @@ namespace vt
     GlyphSource::GlyphSource()
         : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_size(13),
           m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u),
-          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_fitMode(1), m_darkErr{0,0,0}, m_classAlign(true),
+          m_stride(3), m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_hinting(0), m_fitMode(1), m_darkErr{0,0,0}, m_classAlign(true),
           m_path(NULL), m_weight(400), m_csInit(false)
     {
         m_latinPath[0] = 0;
@@ -184,6 +184,18 @@ namespace vt
         }
     }
 
+    void GlyphSource::SetHinting(int mode)
+    {
+        if (mode < 0 || mode > 2) mode = 0;
+        EnterCriticalSection(&m_cs);
+        if (mode != m_hinting)
+        {
+            m_hinting = mode;
+            m_cache.clear();
+        }
+        LeaveCriticalSection(&m_cs);
+    }
+
     void GlyphSource::SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom)
     {
         if (latinPx > 0) m_sizeLatin = latinPx;
@@ -241,10 +253,11 @@ namespace vt
                (cp >= 0x2018 && cp <= 0x201F) || cp == 0x2025 || cp == 0x2026;
     }
 
-    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase)
+    const GlyphCell* GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024, bool engineSlot)
     {
         if (!m_faceA)
             return NULL;
+        if (scale1024 < 1 || scale1024 > 1024) return NULL;
 
         // phase is a SIGNED shift in quarter pixels (-3..3).  The outline is
         // rasterised at size*m_ss, so a shift of one screen pixel is m_ss ppem
@@ -260,7 +273,9 @@ namespace vt
         const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
         const unsigned long long key = (unsigned long long)codepoint
             | ((unsigned long long)advKey << 32)
-            | ((unsigned long long)(phase + 3) << 40);
+            | ((unsigned long long)(phase + 3) << 40)
+            | ((unsigned long long)scale1024 << 44)
+            | ((unsigned long long)engineSlot << 55);
 
         EnterCriticalSection(&m_cs);
         std::map<unsigned long long, GlyphCell>::iterator it = m_cache.find(key);
@@ -291,24 +306,28 @@ namespace vt
                 m_cache.clear();
 
             FT_Face face = (FT_Face)FaceHandleFor(codepoint);
+            if (!FT_Get_Char_Index(face, codepoint))
+            {
+                LeaveCriticalSection(&m_cs);
+                return NULL;
+            }
 
-            // bake the subpixel phase in: a quarter-pixel horizontal delta makes
-            // FreeType shift the coverage, and TARGET_LIGHT keeps horizontal
-            // hinting from snapping it back onto the pixel grid
+            // The transform runs after grid fitting: fractional pen positions
+            // shift the antialiasing coverage without moving the logical pen.
             FT_Matrix mat;
             FT_Vector delta;
-            mat.xx = 1 << 16; mat.xy = 0;
-            mat.yx = 0;       mat.yy = 1 << 16;
+            mat.xx = scale1024 * 64; mat.xy = 0;
+            mat.yx = 0;              mat.yy = scale1024 * 64;
             delta.x = (FT_Pos)(phase * 16 * m_ss);   // quarter pixels -> rasteriser space
             delta.y = 0;
             FT_Set_Transform(face, &mat, phase ? &delta : NULL);
 
             const bool aa = m_aa;
-            // Subpixel phases keep LIGHT hinting: vertical hinting is exactly what
-            // preserves one-pixel horizontal strokes at these sizes.  Fully
-            // unhinted outlines (FT_LOAD_NO_HINTING) lost them, which is why
-            // horizontal strokes turned into dotted lines.
-            const FT_Int32 loadFlags = (aa ? FT_LOAD_TARGET_LIGHT : FT_LOAD_TARGET_MONO) | FT_LOAD_NO_BITMAP;
+            // LIGHT preserves spacing while aligning horizontal strokes to the
+            // vertical grid. NORMAL and unhinted are available for comparison.
+            const FT_Int32 grayFlags = m_hinting == 1 ? FT_LOAD_TARGET_NORMAL :
+                (m_hinting == 2 ? FT_LOAD_NO_HINTING : FT_LOAD_TARGET_LIGHT);
+            const FT_Int32 loadFlags = (aa ? grayFlags : FT_LOAD_TARGET_MONO) | FT_LOAD_NO_BITMAP;
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags))
             {
                 LeaveCriticalSection(&m_cs);
@@ -322,6 +341,11 @@ namespace vt
 
             const int advance = (gameAdvance > 0) ? gameAdvance : (int)((g->advance.x + 32 * m_ss) / (64 * m_ss));
             cell.width = (unsigned char)(advance < 0 ? 0 : (advance > 255 ? 255 : advance));
+            // Natural layout follows the font's fractional design advance,
+            // independent of raster hinting and sampling resolution. Otherwise
+            // normal hinting at 1x rounds every letter's pen to whole pixels.
+            cell.advanceQ = (int)floor((double)g->linearHoriAdvance * scale1024 /
+                (16384.0 * m_ss * 1024.0) + 0.5);
 
             // Fit the OUTLINE uniformly before rendering. Never resize an
             // already rasterised bitmap or stretch ideographs to fill 16 rows.
@@ -357,9 +381,9 @@ namespace vt
                 double scale = 1.0;
                 if (fitCell && inkW > available)
                     scale = available / inkW;
-                if (inkH > m_lines && scale > m_lines / inkH)
+                if (engineSlot && inkH > m_lines && scale > m_lines / inkH)
                     scale = m_lines / inkH;
-                mat.xx = mat.yy = (FT_Fixed)(scale * 65536.0 + 0.5);
+                mat.xx = mat.yy = (FT_Fixed)(scale * scale1024 * 64.0 + 0.5);
                 // The CBox already includes the initial phase. Reposition
                 // bearings that overflow the cell without changing the shape.
                 const double initialPhase = phase * 0.25;
@@ -375,15 +399,27 @@ namespace vt
                     if (closing) targetLeft = inset;
                     offset = targetLeft - left;
                 }
-                if (right + offset > limit - inset) offset = limit - inset - right;
-                if (left + offset < inset) offset = inset - left;
+                if (gameAdvance > 0)
+                {
+                    if (right + offset > limit - inset) offset = limit - inset - right;
+                    if (left + offset < inset) offset = inset - left;
+                }
+                cell.inkLeftQ = (int)floor((left + offset) * 4.0 + 0.5);
+                cell.inkRightQ = (int)ceil((right + offset) * 4.0);
                 delta.x = (FT_Pos)((initialPhase + offset) * unit);
-                // Translate only if the full outline would be vertically clipped.
-                const double top = m_baseline - box.yMax / unit * scale;
-                const double bottom = m_baseline - box.yMin / unit * scale;
-                double shiftY = top < 0.0 ? -top : 0.0;
-                if (bottom + shiftY > m_lines) shiftY = m_lines - bottom;
-                delta.y = (FT_Pos)(-shiftY * unit);
+                // All direct-drawing glyphs share the same baseline. Ink above
+                // or below the old 16-row cell must retain its actual bearing;
+                // fitting each ink box vertically made Chinese letters bounce.
+                delta.y = 0;
+                if (engineSlot)
+                {
+                    // Fixed engine glyph slots (swap) cannot carry inkY.
+                    const double top = m_baseline - box.yMax / unit * scale;
+                    const double bottom = m_baseline - box.yMin / unit * scale;
+                    double shiftY = top < 0.0 ? -top : 0.0;
+                    if (bottom + shiftY > m_lines) shiftY = m_lines - bottom;
+                    delta.y = (FT_Pos)(-shiftY * unit);
+                }
                 FT_Set_Transform(face, &mat, &delta);
             }
             if (FT_Load_Char(face, (FT_ULong)codepoint, loadFlags | FT_LOAD_RENDER))
@@ -394,16 +430,39 @@ namespace vt
 
             // Area coverage from the high-resolution bitmap. Every source
             // sample contributes to its target pixel, so no rows are skipped.
+            int rows = m_lines;
+            if (gameAdvance <= 0)
+                cell.inkX = (int)floor((double)g->bitmap_left / ss);
+            if (!engineSlot)
+            {
+                if (g->bitmap.rows)
+                {
+                    const int firstY = m_baseline * ss - g->bitmap_top;
+                    cell.inkY = (int)floor((double)firstY / ss);
+                    rows = (firstY + (int)g->bitmap.rows - cell.inkY * ss + ss - 1) / ss;
+                    if (rows > 32)
+                    {
+                        LeaveCriticalSection(&m_cs);
+                        return NULL;
+                    }
+                    cell.inkRows = rows;
+                }
+            }
+            if (gameAdvance <= 0 && (int)g->bitmap.width + g->bitmap_left - cell.inkX * ss > 24 * ss)
+            {
+                LeaveCriticalSection(&m_cs);
+                return NULL;
+            }
             unsigned int acc[24 * 32] = { 0 };
             for (unsigned int r = 0; r < g->bitmap.rows; ++r)
             {
-                const int sy = m_baseline * ss - g->bitmap_top + (int)r;
-                if (sy < 0 || sy >= m_lines * ss)
+                const int sy = m_baseline * ss - g->bitmap_top + (int)r - cell.inkY * ss;
+                if (sy < 0 || sy >= rows * ss)
                     continue;
                 const unsigned char* src = g->bitmap.buffer + r * g->bitmap.pitch;
                 for (unsigned int c = 0; c < g->bitmap.width; ++c)
                 {
-                    const int sx = g->bitmap_left + (int)c;
+                    const int sx = g->bitmap_left + (int)c - cell.inkX * ss;
                     if (sx < 0 || sx >= m_stride * 8 * ss)
                         continue;
                     const int cov = (g->bitmap.pixel_mode == FT_PIXEL_MODE_MONO)
@@ -413,10 +472,14 @@ namespace vt
                 }
             }
             const unsigned int div = ss * ss;
-            for (int y = 0; y < m_lines; ++y)
+            for (int y = 0; y < rows; ++y)
                 for (int x = 0; x < m_stride * 8; ++x)
                 {
                     int cov = (acc[y * 24 + x] + div / 2) / div;
+                    // Fixed-point outline fitting can leave a tiny fringe just
+                    // beyond an explicit legacy cell. Clip that compatibility
+                    // path exactly; natural line glyphs keep their bearings.
+                    if (m_fit && gameAdvance > 0 && x >= gameAdvance) cov = 0;
                     cell.cov[y * 24 + x] = (unsigned char)cov;
                     if (cov >= 128)
                         cell.bits[y * m_stride + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
@@ -428,5 +491,19 @@ namespace vt
             LeaveCriticalSection(&m_cs);
             return result;
         }
+    }
+
+    int GlyphSource::KerningQuarter(unsigned int left, unsigned int right)
+    {
+        if (!left || !right || !m_faceA) return 0;
+        EnterCriticalSection(&m_cs);
+        FT_Face face = (FT_Face)FaceHandleFor(left);
+        FT_Vector delta = { 0, 0 };
+        if (face == FaceHandleFor(right) && FT_HAS_KERNING(face))
+            FT_Get_Kerning(face, FT_Get_Char_Index(face, left), FT_Get_Char_Index(face, right),
+                           FT_KERNING_UNFITTED, &delta);
+        const int q = (int)floor((double)delta.x / (16 * m_ss) + 0.5);
+        LeaveCriticalSection(&m_cs);
+        return q;
     }
 }

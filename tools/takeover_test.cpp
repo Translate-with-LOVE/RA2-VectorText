@@ -258,7 +258,7 @@ int main(int argc, char** argv)
     {
         for (int i = 0; i < W * H; ++i) g_surf[i] = BG;
         int newX = 0;
-        vt::Takeover::TryBlit(g_bitFont, (unsigned)'\u4E2D', 4, 4, -1, &newX);
+        vt::Takeover::TryBlit(g_bitFont, (unsigned)L'\u4E2D', 4, 4, -1, &newX);
         int partial = 0, full = 0;
         for (int i = 0; i < W * H; ++i)
         {
@@ -276,7 +276,7 @@ int main(int argc, char** argv)
         for (int i = 0; i < W * H; ++i) g_surf[i] = BG;
         InitBitFont(&in, g_surf, W, FG, 0, 0, 19, 19);      // 20x20 clip box at the origin
         int newX = 0;
-        vt::Takeover::TryBlit(g_bitFont, (unsigned)'\u4E2D', 10, 10, -1, &newX);
+        vt::Takeover::TryBlit(g_bitFont, (unsigned)L'\u4E2D', 10, 10, -1, &newX);
         bool outside = false;
         for (int y = 0; y < H && !outside; ++y)
             for (int x = 0; x < W; ++x)

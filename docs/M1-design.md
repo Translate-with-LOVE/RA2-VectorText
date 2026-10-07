@@ -1,5 +1,7 @@
 # VectorText M1 设计文档：用矢量光栅化接管点阵文字
 
+> 历史调研记录。早期选型、预览和重复自检脚本已清理；当前配置和可执行验证入口见 [README](../README.md)。
+
 > 前置：M0 已完成（观测钩子 + 两轮真实运行），结论见 [../VectorText-analysis.md](../VectorText-analysis.md)
 > 与 [../README.md](../README.md)。本文只描述 M1 做什么、怎么做、怎么证明做对了。
 >

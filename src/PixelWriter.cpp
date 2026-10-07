@@ -33,7 +33,10 @@ namespace vt
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color)
     {
-        if (!t.base || t.pitch <= 0 || cellLines <= 0)
+        x += cell.inkX;
+        y += cell.inkY;
+        if (cell.inkRows > 0) cellLines = cell.inkRows;
+        if (!t.base || t.pitch <= 0 || cellLines <= 0 || cellLines > 32)
             return 0;
 
         int written = 0;
@@ -183,7 +186,10 @@ namespace vt
     int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                    unsigned short color, const ColorFormat& fmt)
     {
-        if (!t.base || t.pitch <= 0 || cellLines <= 0)
+        x += cell.inkX;
+        y += cell.inkY;
+        if (cell.inkRows > 0) cellLines = cell.inkRows;
+        if (!t.base || t.pitch <= 0 || cellLines <= 0 || cellLines > 32)
             return 0;
 
         int written = 0;

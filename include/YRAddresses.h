@@ -45,6 +45,10 @@ namespace yra
     //           8B 41 04                 mov eax,[ecx+4]               (3) -> 6
     constexpr unsigned int BitFont_GetTextDimension     = 0x00433CF0u;
     constexpr unsigned int BitFont_GetTextDimensionSz   = 6;
+    // Successful measurement epilogue: mov al,1 / pop ebx / add esp,1Ch.
+    // All original outputs are written; ESP+20h is the original entry stack.
+    constexpr unsigned int BitFont_DimensionDone         = 0x00433E7Fu;
+    constexpr unsigned int BitFont_DimensionDoneSz       = 6;
 
     // --- text drawing --------------------------------------------------------
     //
@@ -79,4 +83,22 @@ namespace yra
     // prologue: 83 EC 30 / 53 / 55 / 56 / 57                           (7) -> 5
     constexpr unsigned int BitFont_Blit                 = 0x00434120u;
     constexpr unsigned int BitFont_BlitSz               = 5;
+
+    // Single-line X takeover; all sites verified against local gamemd.exe.
+    // DrawString entry: sub esp,10h / mov edx,[esp+14h] (3+4).
+    constexpr unsigned int BitFont_DrawString           = 0x00434500u;
+    constexpr unsigned int BitFont_DrawStringSz         = 7;
+    // DrawText has three row loops (explicit break / wrapped / final row).
+    // Each site: mov reg,[esp+50h] / add eax,reg (4+2).
+    constexpr unsigned int BitText_LineBreak            = 0x00434D91u;
+    constexpr unsigned int BitText_LineWrap             = 0x00434FA3u;
+    constexpr unsigned int BitText_LineLast             = 0x0043518Eu;
+    constexpr unsigned int BitText_LineSz               = 6;
+    // Unlock entry: push esi / mov esi,ecx / mov ecx,[esp+8] (1+2+4).
+    constexpr unsigned int BitFont_Unlock               = 0x00434990u;
+    constexpr unsigned int BitFont_UnlockSz             = 7;
+    // PrintUnicode's final Print call: mov ecx,[0089C4B8] (6 bytes).
+    // EDI=viewport RectangleStruct; ESI=legacy X; EBP=Y; EBX=font.
+    constexpr unsigned int Drawing_LineBox              = 0x004A5FD6u;
+    constexpr unsigned int Drawing_LineBoxSz            = 6;
 }

@@ -11,6 +11,7 @@ Checks, without running the game:
   * every record's name pointer resolves inside the image to the name of an
     exported function (this is how Syringe binds a hook to its handler)
   * every name pointer has a base relocation (needed for ASLR)
+  * neither ordinary nor delay imports require Phobos/Ares
 
 usage:  python verify_dll.py [path\\to\\VectorText.dll]
 """
@@ -72,6 +73,28 @@ def main():
         end = d.index(b'\0', off)
         return d[off:end].decode('latin1')
 
+    # ---- imports: rendering must also work without Phobos/Ares ------------
+    imports = []
+    for directory, descriptor_size, delayed in ((1, 20, False), (13, 32, True)):
+        import_rva, import_size = struct.unpack_from('<II', d, dd + directory * 8)
+        if not import_rva:
+            continue
+        off = rva2off(import_rva)
+        end = off + import_size
+        while off + descriptor_size <= end:
+            fields = struct.unpack_from('<' + 'I' * (descriptor_size // 4), d, off)
+            if not any(fields):
+                break
+            if delayed:
+                name_va = image_base + fields[1] if fields[0] & 1 else fields[1]
+            else:
+                name_va = image_base + fields[3]
+            imports.append(read_cstr(name_va))
+            off += descriptor_size
+    independent = all(name and name.lower() not in ('phobos.dll', 'ares.dll') for name in imports)
+    print('\nimports   : %s' % ', '.join(name or '<invalid>' for name in imports))
+    print('no Phobos/Ares dependency: %s' % ('ok' if independent else 'BAD'))
+
     # ---- exports ----------------------------------------------------------
     exp_rva, exp_size = struct.unpack_from('<II', d, dd)
     exports = {}
@@ -112,7 +135,7 @@ def main():
             o += blocksize
 
     print('\n.syhks00 records:')
-    ok = True
+    ok = independent
     for name, va, vsize, rawptr, rawsize in hooks:
         count = 0
         for off in range(rawptr, rawptr + rawsize, 16):

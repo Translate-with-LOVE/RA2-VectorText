@@ -10,6 +10,8 @@
 #include <windows.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <math.h>
 #include <vector>
 
 // Uses the production per-character takeover and a real game.fnt table.
@@ -44,6 +46,8 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
 int main(int argc, char** argv) {
     const char* output = argc > 1 ? argv[1] : "preview.bmp";
     bool check = argc > 2 && !strcmp(argv[2], "--check");
+    bool line = argc > 3 && !strcmp(argv[3], "--line");
+    bool scene = argc > 4 && !strcmp(argv[4], "--scene");
     FILE* f = fopen("F:\\Mental Omega\\game.fnt", "rb");
     if (!f) return 2;
     fseek(f, 0, SEEK_END); long len = ftell(f); rewind(f);
@@ -57,6 +61,16 @@ int main(int argc, char** argv) {
     fd.bitmaps = &data[28 + 131072];
     const int w = 720, h = 320;
     std::vector<unsigned short> pixels(w * h, 0);
+    if (scene) {
+        for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+            // Deterministic dark terrain-like RGB565 background. The bottom
+            // sample also exercises white mixed text on a flat UI grey.
+            unsigned int noise = ((unsigned int)x * 1664525u + (unsigned int)y * 1013904223u) >> 25;
+            int red = 3 + (noise & 3), green = 10 + (noise & 7), blue = 3 + (noise & 1);
+            if (y >= 270) { red = blue = 3; green = 6; }
+            pixels[y * w + x] = (unsigned short)((red << 11) | (green << 5) | blue);
+        }
+    }
     unsigned char bf[128] = {};
     *(void**)(bf + 4) = &fd; *(void**)(bf + 12) = &pixels[0];
     *(int*)(bf + 16) = w;
@@ -81,13 +95,17 @@ int main(int argc, char** argv) {
     for (int r = 0; r < rowCount; ++r) {
         *(unsigned short*)(bf + 36) = r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
         int x = 4, y = 6 + r * 23;
+        if (line && !vt::Takeover::BeginLine(bf, rows[r], -1, x, y, x, 0, 0, 0x43464D)) ++fails;
         for (const wchar_t* p = rows[r]; *p; ++p) {
             int oldWidth = fd.bitmaps[(fd.symbols[*p] - 1) * fd.bytes];
             int nextX = -1;
-            if (!vt::Takeover::TryBlit(bf, *p, x, y, -1, &nextX)) ++fails;
+            bool drawn = line && vt::Takeover::TryLineBlit(bf, *p, x, y, -1, 0x43464D, &nextX);
+            if (!drawn) drawn = vt::Takeover::TryBlit(bf, *p, x, y, -1, &nextX);
+            if (!drawn) ++fails;
             if (nextX != x + oldWidth) ++fails;
             x = nextX;
         }
+        vt::Takeover::EndLine(bf);
     }
     if (data != original) { printf("FAIL: game metrics/data changed\n"); ++fails; }
     WriteBmp(output, pixels, w, h);
@@ -104,6 +122,7 @@ int main(int argc, char** argv) {
     // Direct glyph checks supplement the surface/advance checks.
     vt::GlyphSource glyphs;
     glyphs.SetAntiAlias(true); glyphs.SetSupersample(vt::Cfg::Supersample());
+    glyphs.SetHinting(vt::Cfg::ConfigInt("Hinting", 0));
     glyphs.SetClassAlign(vt::Cfg::ConfigInt("ClassAlign", 1) != 0);
     glyphs.SetFitMode(0);
     glyphs.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
@@ -124,6 +143,33 @@ int main(int argc, char** argv) {
     const vt::GlyphCell* p0 = glyphs.Get('W', 11, 0);
     const vt::GlyphCell* p2 = glyphs.Get('W', 11, 2);
     if (p0 == p2) { printf("FAIL: subpixel phase cache collision\n"); ++fails; }
+    // A rasterisation choice must not change natural line spacing. Compare
+    // design advances across target-size normal/light and 4x light rendering.
+    vt::GlyphSource metrics;
+    metrics.SetAntiAlias(true); metrics.SetSupersample(1);
+    metrics.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
+    metrics.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSizeCJK());
+    if (latinFont[0]) metrics.SetLatinFont(latinFont);
+    const wchar_t* metricSample = L"AVWim0g\x4E2D\x56FD\x3002";
+    for (const wchar_t* p = metricSample; *p; ++p) {
+        metrics.SetSupersample(1); metrics.SetHinting(0);
+        const vt::GlyphCell* light = metrics.Get(*p, -1);
+        if (!light) { ++fails; continue; }
+        int expectedQ = light->advanceQ;
+        metrics.SetHinting(1);
+        const vt::GlyphCell* normal = metrics.Get(*p, -1);
+        if (!normal || normal->advanceQ != expectedQ) { printf("FAIL: hinting changes U+%04X advance\n", *p); ++fails; }
+        metrics.SetHinting(0); metrics.SetSupersample(4);
+        const vt::GlyphCell* sampled = metrics.Get(*p, -1);
+        if (!sampled || sampled->advanceQ != expectedQ) { printf("FAIL: sampling changes U+%04X advance\n", *p); ++fails; }
+        metrics.SetSupersample(1);
+        const vt::GlyphCell* phased = metrics.Get(*p, -1, 2);
+        if (!phased || phased->advanceQ != expectedQ) { printf("FAIL: phase changes U+%04X advance\n", *p); ++fails; }
+        const vt::GlyphCell* scaled = metrics.Get(*p, -1, 0, 950);
+        if (!scaled || abs(scaled->advanceQ - (int)floor(expectedQ * 950.0 / 1024 + 0.5)) > 1) {
+            printf("FAIL: scaled U+%04X natural advance is inconsistent\n", *p); ++fails;
+        }
+    }
     const vt::GlyphCell* box = glyphs.Get(0x56FD, 14, 0); // 国: continuous side strokes
     int top = -1, bottom = -1, blank = 0;
     for (int y = 0; y < 16; ++y) {

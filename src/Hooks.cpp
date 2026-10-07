@@ -1,8 +1,7 @@
 // ===========================================================================
-//  VectorText M0 -- text pipeline observation hooks
-//
-//  Every hook returns 0, which tells Syringe to replay the original bytes and
-//  continue: the game behaves exactly as it does without this DLL.
+//  VectorText -- text observation and per-glyph / single-line X takeover.
+//  Observation and row-boundary hooks replay original bytes. Successful Blit
+//  takeover returns through a ret-10h trampoline with the engine's next pen X.
 //
 //  String arguments are read from the offsets established by YRpp + the first
 //  log run, with a bounded fallback scan; calls without a readable string are
@@ -38,6 +37,32 @@ namespace
         const BYTE* end       = (const BYTE*)p + bytes;
         const BYTE* regionEnd = (const BYTE*)mbi.BaseAddress + mbi.RegionSize;
         return end <= regionEnd;
+    }
+
+    struct DynamicMeasurement
+    {
+        DWORD entryEsp, caller;
+        int* output;
+        int measured;
+        bool loading;
+    };
+    static __declspec(thread) DynamicMeasurement t_measurement = {};
+
+    void CaptureDynamicMeasurement(REGISTERS* R)
+    {
+        // The engine reuses its text argument slot as a width accumulator.
+        // Read the original arguments now; none of them may be reconstructed
+        // from that slot in the successful-return hook.
+        t_measurement = {};
+        const DWORD caller = R->Stack32(0);
+        const bool loading = caller == 0x00553199u || caller == 0x005531EFu;
+        const bool message = caller == 0x00433EE6u && R->Stack32(0x14) == 0x00623A81u;
+        int* output = (int*)(uintptr_t)R->Stack32(8);
+        if ((!loading && !message) || !RangeOk(output, sizeof(int))) return;
+        int measured = 0;
+        if (vt::Takeover::MeasureDynamicWidth((void*)(uintptr_t)R->ECX(),
+            (const wchar_t*)(uintptr_t)R->Stack32(4), (int)R->Stack32(0x10), &measured))
+            t_measurement = { R->ESP(), caller, output, measured, loading };
     }
 
     // Copy at most cap-1 wide characters.  No C++ objects in here: __try is not
@@ -290,6 +315,16 @@ VT_DEFINE_HOOK(yra::Drawing_PrintUnicode, VT_Hook_Drawing_PrintUnicode,
 VT_DEFINE_HOOK(yra::BitFont_GetTextDimension, VT_Hook_BitFont_GetTextDimension,
                yra::BitFont_GetTextDimensionSz)
 {
+    if (R->EFLAGS() & 0x400u) R->EFLAGS(R->EFLAGS() & ~0x400u);
+    if (vt::Takeover::DynamicTextWidthEnabled())
+    {
+        __try { CaptureDynamicMeasurement(R); }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            t_measurement = {};
+            vt::Takeover::NoteException();
+        }
+    }
     TextArg arg;
     arg.ptr     = (const wchar_t*)(uintptr_t)R->Stack32(4);
     arg.offset  = 4;
@@ -302,11 +337,41 @@ VT_DEFINE_HOOK(yra::BitFont_GetTextDimension, VT_Hook_BitFont_GetTextDimension,
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// BitText::Print  @ 0x434B90   (single line draw)
-//   ECX = BitText* (unused by the callee), args:
-//   [esp+4]=BitFont* [esp+8]=Surface* [esp+0xC]=const wchar_t* [esp+0x10..]=X,Y,W,H
-// ---------------------------------------------------------------------------
+// Dynamic UI widths, after the engine has written its width/height outputs.
+// Scoped callers preserve all other layout and wrapping measurements.
+VT_DEFINE_HOOK(yra::BitFont_DimensionDone, VT_Hook_BitFont_DimensionDone, yra::BitFont_DimensionDoneSz)
+{
+    if (R->EFLAGS() & 0x400u) R->EFLAGS(R->EFLAGS() & ~0x400u);
+    if (!vt::Takeover::DynamicTextWidthEnabled()) return 0;
+    __try
+    {
+        const DynamicMeasurement pending = t_measurement;
+        if (pending.entryEsp && pending.entryEsp == R->ESP() + 0x20 &&
+            pending.caller == R->Stack32(0x20))
+        {
+            t_measurement = {};
+            if (RangeOk(pending.output, sizeof(int)))
+            {
+                // Loading DrawText still selects rows using legacy advances;
+                // do not make its box narrower than that original measurement.
+                const int original = *pending.output;
+                if (!pending.loading || pending.measured > original) *pending.output = pending.measured;
+                static LONG logged = 0;
+                if (InterlockedIncrement(&logged) <= 8)
+                    vt::Log::Note("DYNAMIC width: %s old=%d new=%d caller=0x%08X",
+                        pending.loading ? "loading" : "message", original, *pending.output, pending.caller);
+            }
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        vt::Takeover::NoteException();
+    }
+    return 0;
+}
+
+// BitText::Print: ECX=BitText; stack +4=font, +8=surface, +C=text,
+// +10..=X,Y,W,H. This observation hook leaves the original call intact.
 VT_DEFINE_HOOK(yra::BitText_Print, VT_Hook_BitText_Print, yra::BitText_PrintSz)
 {
     TextArg arg;
@@ -421,11 +486,15 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
 
         __try
         {
-            drawn = vt::Takeover::TryBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color, &newX);
+            drawn = vt::Takeover::TryLineBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color,
+                                            R->Stack32(0), &newX);
+            if (!drawn)
+                drawn = vt::Takeover::TryBlit((void*)(uintptr_t)R->ECX(), wch, x, y, color, &newX);
         }
         __except (EXCEPTION_EXECUTE_HANDLER)
         {
             drawn = false;
+            vt::Takeover::EndLine(NULL);
             vt::Takeover::NoteException();
             vt::Log::Note("FALLBACK blit-exception wch=U+%04X x=%d y=%d", wch, x, y);
         }
@@ -463,5 +532,98 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
         vt::Log::Count(vt::Hook_BitFont_Blit);
     }
 
+    return 0;
+}
+
+// The original loops still select characters, Y, reveal colours and passes.
+// We only replace horizontal placement in their Blit calls. No font metric
+// table is rewritten, so the engine's wrapping/height measurements stay intact.
+VT_DEFINE_HOOK(yra::BitFont_DrawString, VT_Hook_BitFont_DrawString, yra::BitFont_DrawStringSz)
+{
+    if (R->EFLAGS() & 0x400u) R->EFLAGS(R->EFLAGS() & ~0x400u);
+    if (!vt::Takeover::LineEnabled()) return 0;
+    __try
+    {
+        int count = (int)R->Stack32(0x10);
+        if (!count) count = -1;
+        vt::Takeover::BeginStringLine((void*)(uintptr_t)R->ECX(), (const wchar_t*)(uintptr_t)R->Stack32(4),
+                                     count, (int)R->Stack32(8), (int)R->Stack32(0xC));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        vt::Takeover::EndLine(NULL);
+        vt::Takeover::NoteException();
+    }
+    return 0;
+}
+
+namespace
+{
+    DWORD PrepareRichLine(REGISTERS* R, unsigned int caller)
+    {
+        if (R->EFLAGS() & 0x400u) R->EFLAGS(R->EFLAGS() & ~0x400u);
+        if (!vt::Takeover::LineEnabled()) return 0;
+        __try
+        {
+            const DWORD end = R->Stack32(0x4C), start = R->EBP();
+            if (end < start || ((end - start) & 1) || (end - start) / 2 > 2048)
+                vt::Takeover::EndLine(NULL);
+            else
+                vt::Takeover::BeginLine((void*)(uintptr_t)R->Stack32(0x44),
+                    (const wchar_t*)(uintptr_t)start, (int)((end - start) / 2),
+                    (int)R->Stack32(0x50) + (int)R->EAX(), (int)R->Stack32(0x54),
+                    (int)R->Stack32(0x50), (int)R->Stack32(0x58), (int)R->Stack32(0x60), caller);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            vt::Takeover::EndLine(NULL);
+            vt::Takeover::NoteException();
+        }
+        return 0;
+    }
+}
+
+VT_DEFINE_HOOK(yra::BitText_LineBreak, VT_Hook_BitText_LineBreak, yra::BitText_LineSz)
+{ return PrepareRichLine(R, 0x00434EA6u); }
+VT_DEFINE_HOOK(yra::BitText_LineWrap, VT_Hook_BitText_LineWrap, yra::BitText_LineSz)
+{ return PrepareRichLine(R, 0x004350E1u); }
+VT_DEFINE_HOOK(yra::BitText_LineLast, VT_Hook_BitText_LineLast, yra::BitText_LineSz)
+{ return PrepareRichLine(R, 0x004352BAu); }
+
+VT_DEFINE_HOOK(yra::BitFont_Unlock, VT_Hook_BitFont_Unlock, yra::BitFont_UnlockSz)
+{
+    vt::Takeover::EndLine((void*)(uintptr_t)R->ECX());
+    return 0;
+}
+
+VT_DEFINE_HOOK(yra::Drawing_LineBox, VT_Hook_Drawing_LineBox, yra::Drawing_LineBoxSz)
+{
+    if (!vt::Takeover::LineEnabled()) return 0;
+    __try
+    {
+        const int* rect = (const int*)(uintptr_t)R->EDI();
+        if (RangeOk(rect, 16) && rect[2] > 0 && rect[2] <= 32768)
+        {
+            int left = rect[0], right = left + rect[2]; // RectangleStruct uses X,Y,W,H.
+            const int flags = (R->Stack32(0x50) >> 8) & 3;
+            const int gameX = (int)R->ESI(), oldWidth = (int)R->Stack32(0x44);
+            int align = 0;
+            if (flags & 1)
+            {
+                const int centre = gameX + oldWidth / 2;
+                const int half = centre - left < right - centre ? centre - left : right - centre;
+                left = centre - half; right = centre + half; align = 1;
+            }
+            else if (flags & 2) { right = gameX + oldWidth; align = 2; }
+            else left = gameX;
+            vt::Takeover::SetLineBox((void*)(uintptr_t)R->EBX(),
+                (const wchar_t*)(uintptr_t)R->Stack32(0x10), gameX, (int)R->EBP(), left, right - left, align);
+        }
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        vt::Takeover::EndLine(NULL);
+        vt::Takeover::NoteException();
+    }
     return 0;
 }

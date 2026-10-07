@@ -2,7 +2,7 @@
 # VectorText workspace
 # ---------------------------------------------------------------------------
 
-# build outputs (build.bat / selftest.bat write here)
+# build and regression-test outputs
 build/
 backups/
 *.obj

@@ -1,5 +1,7 @@
 # Mental Omega 矢量文字渲染：M0 → M2 交付说明
 
+> 历史交付记录。文中旧配置及部分脚本已被替代或清理；当前使用方式见 [README](../README.md)。
+
 > 工程目录 `F:\Mental Omega\VectorText`；产出物是游戏根目录的 `VectorText.dll` + `VectorText.ini`。
 > 全部行为可用一个 INI 键回退；删除这两个文件即完全无痕。
 
