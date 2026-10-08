@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
-// Native game.exe 1.006TUC profile, verified against Steam CRC 574DFF5D.
+// Native game.exe 1.006 profile, verified against Steam CRC 574DFF5D.
 #pragma once
 
 namespace ra2a

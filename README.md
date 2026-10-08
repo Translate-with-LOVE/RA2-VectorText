@@ -1,7 +1,7 @@
 # VectorText
 
 由 Syringe 加载的 32 位矢量文字补丁。同一个 `VectorText.dll` 自动识别
-原版 RA2 `game.exe 1.006TUC` 和尤里复仇 `gamemd.exe 1.001`，挂接各自的原生文字函数。
+原版 RA2 `game.exe 1.006` 和尤里复仇 `gamemd.exe 1.001`，挂接各自的原生文字函数。
 不依赖 Phobos、Ares 或 cnc-ddraw，FreeType 静态链接进 DLL。
 最低运行系统为 **Windows 7**，DLL 使用 x86 及静态 C/C++ 运行库，也可在 64 位 Windows 的游戏进程中加载。
 

@@ -2,7 +2,7 @@
 
 ## 支持范围与加载
 
-补丁由 Syringe 加载。同一个 `VectorText.dll` 自动识别原版 RA2 `game.exe 1.006TUC`
+补丁由 Syringe 加载。同一个 `VectorText.dll` 自动识别原版 RA2 `game.exe 1.006`
 和尤里复仇 `gamemd.exe 1.001`，全部文字 hook 地址属于所选游戏本体。
 不需要 Phobos、Ares 或 cnc-ddraw；FreeType 静态链接进 DLL。
 已验证的地址表和程序指纹如下，文件大小及 CRC 用于日志取证：
