@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "LayoutState.h"
 
 // Scoped native measurement capture and successful-return adjustment.
@@ -16,24 +17,24 @@ void CaptureDynamicMeasurement(REGISTERS *R)
     // from that slot in the successful-return hook.
     t_measurement = {};
     const DWORD caller = R->Stack32(0);
-    if (t_background.entryEsp && caller == 0x00433EE6u && R->Stack32(0x14) == 0x004A59F6u &&
+    if (t_background.entryEsp && caller == game::Width_Return && R->Stack32(0x14) == game::Drawing_WidthReturn &&
         t_background.text == (const wchar_t *)(uintptr_t)R->Stack32(4))
         t_background.valid =
             vt::Takeover::MeasureTextInkY((void *)(uintptr_t)R->ECX(), t_background.text, t_background.anchor,
                                           t_background.align, &t_background.ink) &&
             t_background.ink.lines == 1;
-    const bool loading = caller == 0x00553199u || caller == 0x005531EFu;
+    const bool loading = caller == game::Loading_WidthReturn1 || caller == game::Loading_WidthReturn2;
     // Startup computes each copyright row's X = screen width - measured
     // width - 10. It then prints with left alignment, so the old bitmap
     // measurement must be replaced before that anchor is calculated.
-    const bool startup = caller == 0x00433EE6u &&
-        (R->Stack32(0x14)==0x00531459u || R->Stack32(0x14)==0x005314B3u);
-    const bool message = caller == 0x00433EE6u && R->Stack32(0x14) == 0x00623A81u;
+    const bool startup = caller == game::Width_Return &&
+        (R->Stack32(0x14)==game::Startup_WidthReturn1 || R->Stack32(0x14)==game::Startup_WidthReturn2);
+    const bool message = caller == game::Width_Return && R->Stack32(0x14) == game::Message_WidthReturn;
     if (message)
         t_message = {};
     // Native tooltip measures before adding 8px horizontal padding and
     // clamping its X against the selected surface width (0x478F2D..5A).
-    const bool tooltip = caller == 0x00478F0Bu;
+    const bool tooltip = caller == game::Tooltip_WidthReturn;
     if (tooltip)
         t_tooltip = {};
     int *output = (int *)(uintptr_t)R->Stack32(8);
@@ -81,7 +82,7 @@ using namespace vt::hooks;
 //   __thiscall: ECX = BitFont*, [esp+4]=pText [esp+8]=int* pWidth
 //               [esp+0xC]=int* pHeight [esp+0x10]=nMaxWidth
 // ---------------------------------------------------------------------------
-VT_DEFINE_HOOK(yra::BitFont_GetTextDimension, VT_Hook_BitFont_GetTextDimension, yra::BitFont_GetTextDimensionSz)
+VT_HOOK_FUNC(VT_Hook_BitFont_GetTextDimension)
 {
     if (R->EFLAGS() & 0x400u)
         R->EFLAGS(R->EFLAGS() & ~0x400u);
@@ -111,7 +112,7 @@ VT_DEFINE_HOOK(yra::BitFont_GetTextDimension, VT_Hook_BitFont_GetTextDimension, 
 
 // Dynamic UI widths, after the engine has written its width/height outputs.
 // Scoped callers preserve all other layout and wrapping measurements.
-VT_DEFINE_HOOK(yra::BitFont_DimensionDone, VT_Hook_BitFont_DimensionDone, yra::BitFont_DimensionDoneSz)
+VT_HOOK_FUNC(VT_Hook_BitFont_DimensionDone)
 {
     if (R->EFLAGS() & 0x400u)
         R->EFLAGS(R->EFLAGS() & ~0x400u);

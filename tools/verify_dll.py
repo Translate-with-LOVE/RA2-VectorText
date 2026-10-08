@@ -17,9 +17,10 @@ Checks, without running the game:
   * PE minimum versions and all named imports fit the audited Windows 7 baseline
   * hook spans do not overlap those of an installed Phobos.dll
 
-usage:  python verify_dll.py [path\\to\\VectorText.dll]
+usage:  python verify_dll.py [path\\to\\VectorText.dll] [path\\to\\game.exe]
 """
 import os
+import re
 import struct
 import sys
 
@@ -52,12 +53,16 @@ SetEnvironmentVariableW LoadLibraryExW CompareStringW LCMapStringW GetProcessHea
 GetStringTypeW SetStdHandle FlushFileBuffers GetConsoleOutputCP CreateFileW HeapSize
 SetEndOfFile WriteConsoleW
 '''.split())
+# WINDOWINFO is available since Windows 98; its physical client rectangle is
+# not cnc-ddraw's virtualized GetClientRect result. No newer DPI API is needed.
+WIN7_USER32 = {'GetWindowInfo'}
 
 
 def check_win7(os_version, subsystem_version, symbols):
     versions_ok = os_version == (6, 1) and subsystem_version == (6, 1)
+    allowed = {'kernel32.dll': WIN7_KERNEL32, 'user32.dll': WIN7_USER32}
     unreviewed = [(module, name) for module, name in symbols
-                  if module.lower() != 'kernel32.dll' or name not in WIN7_KERNEL32]
+                  if name not in allowed.get(module.lower(), set())]
     print('Windows 7 PE target: OS %d.%d, subsystem %d.%d [%s]' %
           (*os_version, *subsystem_version, 'ok' if versions_ok else 'BAD'))
     for module, name in unreviewed:
@@ -72,15 +77,20 @@ def load(path):
         return f.read()
 
 
-def check_native_raster(path):
-    game = os.path.join(os.path.dirname(path), 'gamemd.exe')
-    if not os.path.isfile(game):
-        return True
+def address_profile(ra2):
+    header = os.path.join(os.path.dirname(__file__), '..', 'include',
+                          'RA2Addresses.h' if ra2 else 'YRAddresses.h')
+    with open(header, encoding='utf-8') as source:
+        return {name: int(value, 0) for name, value in re.findall(
+            r'constexpr unsigned int (\w+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)', source.read())}
+
+
+def native_image(game):
     d = load(game)
     nt, = struct.unpack_from('<I', d, 0x3C)
     count, = struct.unpack_from('<H', d, nt + 6)
     optsize, = struct.unpack_from('<H', d, nt + 20)
-    timestamp, = struct.unpack_from('<I', d, nt + 8)
+    stamp, = struct.unpack_from('<I', d, nt + 8)
     base, = struct.unpack_from('<I', d, nt + 52)
     sections = [struct.unpack_from('<IIII', d, nt + 24 + optsize + i * 40 + 8)
                 for i in range(count)]
@@ -90,28 +100,53 @@ def check_native_raster(path):
                 off = rawptr + va - base - rva
                 return d[off:off + size]
         return b''
+    return base, stamp, read
+
+
+def check_native_raster(game, profile):
+    if not game:
+        return True
+    base, stamp, read = native_image(game)
+    def at(field, size):
+        return read(profile[field], size)
     prefix = bytes.fromhex('81 EC B4 00 00 00 53 56 8B F1 57')
     copy_prefix = bytes.fromhex('8B 44 24 1C 83 EC 20 53 56 8B F1')
-    ok = base == 0x400000 and timestamp == 0x3BDF544E and (
-        read(0x4BB620, len(prefix)) == prefix and
-        read(0x7E85E4, 4) == struct.pack('<I', 0x4BB620) and
-        read(0x7E8658, 4) == struct.pack('<I', 0x4C1AB0) and
-        read(0x437350, len(copy_prefix)) == copy_prefix and
-        read(0x623A97, 8) == bytes.fromhex('89 54 24 30 8D 44 24 30'))
-    print('\nnative raster: FillRectEx 0x4BB620 and CPU copy 0x437350, vtable/prefix %s'
-          % ('OK' if ok else 'DIFFER -- Present32 will fall back'))
-    print('native message background: 0x623A97 setup before Phobos fill %s' %
-          ('OK' if read(0x623A97, 8) == bytes.fromhex('89 54 24 30 8D 44 24 30') else 'DIFFER'))
-    cpu_ok = (read(0x7E2070, 4) == struct.pack('<I', 0x411650) and
-              read(0x411650, 6) == bytes.fromhex('56 8B F1 8D 4E 14'))
-    print('native BSurface lifetime: 0x411650 vtable/prefix %s' %
-          ('OK' if cpu_ok else 'DIFFER -- CPU text retains RGB565'))
-    subtitle_ok = (read(0x6C9E78, 10) == bytes.fromhex('E8 53 AE D6 FF 8B D5 83 C3 24') and
-                   read(0x6C9E93, 32) == bytes.fromhex(
+    ok = base == 0x400000 and stamp == profile['kExeTimestamp'] and (
+        at('DSurface_Fill', len(prefix)) == prefix and
+        at('DSurface_FillSlot', 4) == struct.pack('<I', profile['DSurface_Fill']) and
+        at('DSurface_TypeSlot', 4) == struct.pack('<I', profile['DSurface_Type']) and
+        at('XSurface_Copy', len(copy_prefix)) == copy_prefix)
+    cpu_ok = (at('BSurface_Vtable', 4) == struct.pack('<I', profile['BSurface_Delete']) and
+              at('BSurface_Delete', 6) == bytes.fromhex('56 8B F1 8D 4E 14'))
+    done = profile['Subtitle_DrawDone']
+    subtitle_ok = (read(done - 5, 5) == b'\xE8' + struct.pack('<i', profile['BitText_DrawText'] - done) and
+                   read(done + 0x16, 32) == bytes.fromhex(
                        '8B 44 24 10 8B 4A 0C 8B 54 24 0C 89 4B 0C 8B 4C 24 20 '
                        '89 55 00 89 7D 04 89 45 08 89 4D 0C 5D 5B'))
-    print('native subtitle erase: 0x6C9E7D return/locals/registers %s' % ('OK' if subtitle_ok else 'DIFFER'))
+    print('native fill/copy/vtables: %s; CPU lifetime: %s; subtitle erase ABI: %s' %
+          ('OK' if ok else 'DIFFER', 'OK' if cpu_ok else 'DIFFER', 'OK' if subtitle_ok else 'DIFFER'))
     return ok and cpu_ok and subtitle_ok
+
+
+def check_runtime_hooks(exports, game, profile, ra2):
+    read = native_image(game)[2] if game else None
+    source = os.path.join(os.path.dirname(__file__), '..', 'src', 'RuntimeHookSites.inc')
+    with open(source, encoding='utf-8') as file:
+        entries = re.findall(r'VT_RUNTIME_HOOK\((\w+),\s*(\w+),\s*(\w+),\s*"([^"\n]*)",\s*"([^"\n]*)"\)', file.read())
+    records = []
+    ok = len(entries) == 16
+    if read:
+        ok = read(0x401000, 5) == bytes.fromhex('53 56 57 8B F1') and ok
+    for field, handler, span, yr_bytes, ra_bytes in entries:
+        address, length = profile[field], profile[span]
+        expected = bytes.fromhex(''.join(re.findall(r'\\x([0-9A-Fa-f]{2})', ra_bytes if ra2 else yr_bytes)))
+        valid = handler in exports and len(expected) == length and length >= 5
+        if read:
+            valid = read(address, length) == expected and valid
+        records.append((address, length, handler))
+        ok = valid and ok
+        print('runtime %-36s 0x%08X/%d [%s]' % (handler, address, length, 'OK' if valid else 'BAD'))
+    return ok, records
 
 
 def check_phobos_overlap(path, records):
@@ -294,13 +329,32 @@ def main():
                   % (addr, size, nameptr, repr(s), exported, reloc, 'BAD' if bad else 'ok'))
         print('   (%d records in %s)' % (count, name))
 
-    ok = check_native_raster(path) and ok
-    # MinHook consumes complete instructions until at least five bytes are
-    # available. These native detours are not Syringe section records.
-    native_records = [(0x4BB620, 6, 'DSurface::FillRectEx'),
-                      (0x437350, 7, 'XSurface CPU copy'),
-                      (0x411650, 6, 'BSurface deleting destructor')]
-    ok = check_phobos_overlap(path, records + native_records) and ok
+    # Explicit executable selects the native audit profile; otherwise inspect
+    # the adjacent game, or check both profiles' exported runtime handlers.
+    game = os.path.abspath(sys.argv[2]) if len(sys.argv) > 2 else None
+    if not game:
+        for name in ('gamemd.exe', 'game.exe'):
+            candidate = os.path.join(os.path.dirname(path), name)
+            if os.path.isfile(candidate):
+                game = candidate
+                break
+    stamp = native_image(game)[1] if game else None
+    if game and stamp not in (0x3BDF544E, 0x3B1EBBED):
+        print('unsupported native executable timestamp: 0x%08X' % stamp)
+        ok = False
+    ra2 = stamp == 0x3B1EBBED
+    profiles = [ra2] if game else [False, True]
+    ok = records == [(0x401000, 5, 'VT_Bootstrap')] and ok
+    for selected in profiles:
+        profile = address_profile(selected)
+        print('\nnative profile: %s' % ('RA2 1.006TUC' if selected else 'YR 1.001'))
+        runtime_ok, runtime_records = check_runtime_hooks(exports, game, profile, selected)
+        ok = runtime_ok and check_native_raster(game, profile) and ok
+        native_records = [(profile['DSurface_Fill'], 6, 'DSurface::FillRectEx'),
+                          (profile['XSurface_Copy'], 7, 'XSurface CPU copy'),
+                          (profile['BSurface_Delete'], 6, 'BSurface deleting destructor')]
+        if game:
+            ok = check_phobos_overlap(game, records + runtime_records + native_records) and ok
     print('\nresult    : %s' % ('OK -- ready for Syringe' if ok else 'PROBLEMS FOUND'))
     return 0 if ok else 1
 

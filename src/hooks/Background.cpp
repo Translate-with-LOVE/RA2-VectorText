@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "LayoutState.h"
 
 // Sidebar/tooltip/message boxes; preserve native Y and Phobos fill ownership.
@@ -10,7 +11,7 @@ using namespace vt::hooks;
 //   __fastcall: ECX = RectangleStruct* out, EDX = const wchar_t* text,
 //               [esp+4..] = Point2D location, WORD flags, int marginX, marginY
 // ---------------------------------------------------------------------------
-VT_DEFINE_HOOK(yra::Drawing_GetTextDimensions, VT_Hook_Drawing_GetTextDimensions, yra::Drawing_GetTextDimensionsSz)
+VT_HOOK_FUNC(VT_Hook_Drawing_GetTextDimensions)
 {
     TextArg arg;
     arg.ptr = (const wchar_t *)(uintptr_t)R->EDX();
@@ -18,7 +19,7 @@ VT_DEFINE_HOOK(yra::Drawing_GetTextDimensions, VT_Hook_Drawing_GetTextDimensions
     arg.fromReg = true;
     ReportText(vt::Hook_Drawing_GetTextDimensions, R, arg, 4, 4, "");
     t_background = {};
-    if (vt::Takeover::DynamicTextWidthEnabled() && R->Stack32(0) == 0x006A9DD1u)
+    if (vt::Takeover::DynamicTextWidthEnabled() && R->Stack32(0) == game::Sidebar_WidthReturn)
     {
         __try
         {
@@ -48,7 +49,7 @@ VT_DEFINE_HOOK(yra::Drawing_GetTextDimensions, VT_Hook_Drawing_GetTextDimensions
     return 0;
 }
 
-VT_DEFINE_HOOK(yra::Drawing_TextDimensionsDone, VT_Hook_Drawing_TextDimensionsDone, yra::Drawing_TextDimensionsDoneSz)
+VT_HOOK_FUNC(VT_Hook_Drawing_TextDimensionsDone)
 {
     __try
     {
@@ -85,7 +86,7 @@ VT_DEFINE_HOOK(yra::Drawing_TextDimensionsDone, VT_Hook_Drawing_TextDimensionsDo
 // adjusted; the message's Y, reveal loop and next row's spacing stay native.
 // Run before 623A9F: Phobos owns that slot and consumes EBP as the height for
 // its translucent fill. Both its fill and the original fill see our Y/height.
-VT_DEFINE_HOOK(yra::Message_Background, VT_Hook_Message_Background, yra::Message_BackgroundSz)
+VT_HOOK_FUNC(VT_Hook_Message_Background)
 {
     __try
     {

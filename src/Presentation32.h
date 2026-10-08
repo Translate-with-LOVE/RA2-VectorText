@@ -29,6 +29,10 @@ namespace vt { namespace Presentation32 {
     using TestCopy = bool (__fastcall*)(void*,const int*,void*,const int*,void*,int,int,int,int);
     bool TestGameCopy(void* dest,const int* dr,void* source,const int* sr,void* copier,TestCopy original);
     void TestCpuTextStart();
+    HRESULT TestCooperativeLevel(void* directDraw, HWND window, DWORD flags);
+    void TestPrimaryTrack(void* surface);
+    int TestRetainedRaster(void* surface);
+    void TestOutputScale(float sx, float sy);
     void TestCpuTextTrack(void* surface);
     void TestCpuTextRelease(void* surface);
     bool TestCpuTextOverlay(void* surface,unsigned int* output,int pitch);

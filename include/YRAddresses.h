@@ -129,4 +129,34 @@ namespace yra
     // EDI=viewport RectangleStruct*; ESI=legacy X; EBP=Y; EBX=BitFont*.
     constexpr unsigned int Drawing_LineBox              = 0x004A5FD6u;
     constexpr unsigned int Drawing_LineBoxSz            = 6;
+
+    constexpr const char* ExeName = "gamemd.exe";
+    constexpr const char* DllName = "VectorText.dll";
+    constexpr const char* Version = "Yuri's Revenge 1.001";
+    constexpr unsigned int Width_Helper = 0x433ED0;
+    constexpr unsigned int Width_Return = 0x433EE6;
+    constexpr unsigned int Drawing_WidthReturn = 0x4A59F6;
+    constexpr unsigned int Loading_WidthReturn1 = 0x553199;
+    constexpr unsigned int Loading_WidthReturn2 = 0x5531EF;
+    constexpr unsigned int Startup_WidthReturn1 = 0x531459;
+    constexpr unsigned int Startup_WidthReturn2 = 0x5314B3;
+    constexpr unsigned int Message_WidthReturn = 0x623A81;
+    constexpr unsigned int Tooltip_WidthReturn = 0x478F0B;
+    constexpr unsigned int Tooltip_DrawReturn = 0x479041;
+    constexpr unsigned int Sidebar_WidthReturn = 0x6A9DD1;
+    constexpr unsigned int String_BlitReturn = 0x43464D;
+    constexpr unsigned int Break_BlitReturn = 0x434EA6;
+    constexpr unsigned int Wrap_BlitReturn = 0x4350E1;
+    constexpr unsigned int Last_BlitReturn = 0x4352BA;
+    constexpr unsigned int Print_StringReturn = 0x434BCF;
+    constexpr unsigned int Ordinary_WidthReturn = 0x4A5EF1;
+    constexpr unsigned int DSurface_Fill = 0x4BB620;
+    constexpr unsigned int DSurface_FillSlot = 0x7E85E4;
+    constexpr unsigned int DSurface_Type = 0x4C1AB0;
+    constexpr unsigned int DSurface_TypeSlot = 0x7E8658;
+    constexpr unsigned int XSurface_Copy = 0x437350;
+    constexpr unsigned int BSurface_Vtable = 0x7E2070;
+    constexpr unsigned int BSurface_Delete = 0x411650;
+    constexpr unsigned int Copier_Opaque = 0x7F7BC4;
+    constexpr unsigned int Copier_Keyed = 0x7F7BF4;
 }

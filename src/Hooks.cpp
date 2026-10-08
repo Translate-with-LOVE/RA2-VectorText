@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "hooks/Support.h"
 
 // Native glyph return/trampoline and row-boundary ABI adapters.
@@ -17,7 +18,7 @@ using namespace vt::hooks;
 //   selected integer advance + tracking. The engine still chooses row ranges,
 //   Y positions, shadow passes and per-character reveal colours.
 // ---------------------------------------------------------------------------
-VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
+VT_HOOK_FUNC(VT_Hook_BitFont_Blit)
 {
     const unsigned int wch = R->Stack32(4) & 0xFFFFu;
     const int x = (int)R->Stack32(8);
@@ -104,7 +105,7 @@ VT_DEFINE_HOOK(yra::BitFont_Blit, VT_Hook_BitFont_Blit, yra::BitFont_BlitSz)
 // The original loops still select characters, Y, reveal colours and passes.
 // We only replace horizontal placement in their Blit calls. No font metric
 // table is rewritten, so the engine's wrapping/height measurements stay intact.
-VT_DEFINE_HOOK(yra::BitFont_DrawString, VT_Hook_BitFont_DrawString, yra::BitFont_DrawStringSz)
+VT_HOOK_FUNC(VT_Hook_BitFont_DrawString)
 {
     if (R->EFLAGS() & 0x400u)
         R->EFLAGS(R->EFLAGS() & ~0x400u);
@@ -154,26 +155,26 @@ DWORD PrepareRichLine(REGISTERS *R, unsigned int caller)
 }
 } // namespace
 
-VT_DEFINE_HOOK(yra::BitText_LineBreak, VT_Hook_BitText_LineBreak, yra::BitText_LineSz)
+VT_HOOK_FUNC(VT_Hook_BitText_LineBreak)
 {
-    return PrepareRichLine(R, 0x00434EA6u);
+    return PrepareRichLine(R, game::Break_BlitReturn);
 }
-VT_DEFINE_HOOK(yra::BitText_LineWrap, VT_Hook_BitText_LineWrap, yra::BitText_LineSz)
+VT_HOOK_FUNC(VT_Hook_BitText_LineWrap)
 {
-    return PrepareRichLine(R, 0x004350E1u);
+    return PrepareRichLine(R, game::Wrap_BlitReturn);
 }
-VT_DEFINE_HOOK(yra::BitText_LineLast, VT_Hook_BitText_LineLast, yra::BitText_LineSz)
+VT_HOOK_FUNC(VT_Hook_BitText_LineLast)
 {
-    return PrepareRichLine(R, 0x004352BAu);
+    return PrepareRichLine(R, game::Last_BlitReturn);
 }
 
-VT_DEFINE_HOOK(yra::BitFont_Unlock, VT_Hook_BitFont_Unlock, yra::BitFont_UnlockSz)
+VT_HOOK_FUNC(VT_Hook_BitFont_Unlock)
 {
     vt::Takeover::EndLine((void *)(uintptr_t)R->ECX());
     return 0;
 }
 
-VT_DEFINE_HOOK(yra::Drawing_LineBox, VT_Hook_Drawing_LineBox, yra::Drawing_LineBoxSz)
+VT_HOOK_FUNC(VT_Hook_Drawing_LineBox)
 {
     if (!vt::Takeover::LineEnabled())
         return 0;

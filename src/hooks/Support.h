@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #pragma once
 #include "SyringeABI.h"
-#include "YRAddresses.h"
+#include "GameAddresses.h"
 #include "Presentation32.h"
 #include "Logger.h"
 #include "Takeover.h"

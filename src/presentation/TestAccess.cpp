@@ -62,9 +62,34 @@ void TestCpuTextStart()
     state = new State();
     state->enabled = true;
     state->cpuTextReady = true;
-    state->options.highResolution = true;
+    state->autoTextScale = Cfg::HiDPI();
+    state->options.highResolution = state->autoTextScale;
     // Deliberately leave backend=0: loading can precede texture creation.
     SetPresentationWriter(Draw);
+}
+HRESULT TestCooperativeLevel(void* directDraw, HWND window, DWORD flags)
+{
+    return HookCooperativeLevel(directDraw, window, flags);
+}
+void TestPrimaryTrack(void* surface)
+{
+    DDSURFACEDESC2 d{};
+    if (Describe(surface, d))
+    {
+        d.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
+        Guard guard;
+        Remember(surface, d);
+    }
+}
+int TestRetainedRaster(void* surface)
+{
+    Guard guard;
+    const auto found = state->surfaces.find(surface);
+    return found != state->surfaces.end() ? found->second.buffer->plane.RasterScale() : 0;
+}
+void TestOutputScale(float sx, float sy)
+{
+    ObserveOutput(sx, sy, OutputRasterScale());
 }
 void TestCpuTextTrack(void *surface)
 {

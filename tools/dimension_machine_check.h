@@ -19,15 +19,15 @@ namespace dimension_machine
         DWORD* frame = (DWORD*)(registers->ESP() + (done ? 0x20 : 0));
         const DWORD caller = frame[0], parent = frame[5];
         frame[0] = testCaller;
-        if (testCaller == 0x433EE6) frame[5] = testParent;
+        if (testCaller == game::Width_Return) frame[5] = testParent;
         if (done) argumentAtDone = frame[1];
         (done ? doneHook : entryHook)(registers);
         frame[0] = caller; frame[5] = parent;
     }
-    static void __cdecl Entry(REGISTERS* registers) { Dispatch(registers, false); }
-    static void __cdecl Done(REGISTERS* registers) { Dispatch(registers, true); }
+    static DWORD __cdecl Entry(REGISTERS* registers) { Dispatch(registers, false); return 0; }
+    static DWORD __cdecl Done(REGISTERS* registers) { Dispatch(registers, true); return 0; }
     static Hook boxEntryHook, boxDoneHook;
-    static DWORD boxCaller = 0x6A9DD1;
+    static DWORD boxCaller = game::Sidebar_WidthReturn;
     static void BoxDispatch(REGISTERS* registers, bool done)
     {
         DWORD* frame = (DWORD*)(registers->ESP() + (done ? 0x10 : 0));
@@ -35,15 +35,15 @@ namespace dimension_machine
         (done ? boxDoneHook : boxEntryHook)(registers);
         frame[0] = caller;
     }
-    static void __cdecl BoxEntry(REGISTERS* registers) { BoxDispatch(registers, false); }
-    static void __cdecl BoxDone(REGISTERS* registers) { BoxDispatch(registers, true); }
+    static DWORD __cdecl BoxEntry(REGISTERS* registers) { BoxDispatch(registers, false); return 0; }
+    static DWORD __cdecl BoxDone(REGISTERS* registers) { BoxDispatch(registers, true); return 0; }
     static unsigned char* boxWidthRoutine;
     static void* boxFont;
     static int __fastcall BoxWidth(void* measuredFont, void*, const wchar_t* text, int)
     {
         typedef bool(__thiscall* Measure)(void*,const wchar_t*,int*,int*,int);
         const DWORD savedCaller = testCaller, savedParent = testParent;
-        testCaller = 0x433EE6; testParent = 0x4A59F6;
+        testCaller = game::Width_Return; testParent = game::Drawing_WidthReturn;
         int width = 0;
         ((Measure)boxWidthRoutine)(measuredFont,text,&width,NULL,0);
         testCaller = savedCaller; testParent = savedParent;
@@ -57,34 +57,15 @@ namespace dimension_machine
     }
 
     static void Stub(unsigned char* at, unsigned char* resume, const unsigned char* replay,
-                     DWORD origin, void(__cdecl* dispatch)(REGISTERS*), int replayBytes = 6)
+                     DWORD origin, DWORD(__cdecl* dispatch)(REGISTERS*), int replayBytes = 6)
     {
-        const unsigned char snapshot[] = {
-            0x9C, 0x60,                         // pushfd; pushad
-            0x83,0x44,0x24,0x0C,0x04,         // saved ESP += sizeof(EFLAGS)
-            0x83,0xEC,0x08,                    // space for origin/flags before regs
-            0x8B,0x44,0x24,0x28,              // saved EFLAGS
-            0x89,0x44,0x24,0x04,
-            0xC7,0x04,0x24                     // mov [esp], origin (imm32 follows)
-        };
-        memcpy(at, snapshot, sizeof(snapshot)); at += sizeof(snapshot);
-        *(DWORD*)at = origin; at += 4;
-        *at++ = 0x54;                          // push esp = REGISTERS*
-        *at++ = 0xB8; *(DWORD*)at = (DWORD)dispatch; at += 4;
-        *at++ = 0xFF; *at++ = 0xD0;            // call eax
-        const unsigned char restore[] = {
-            0x83,0xC4,0x04,
-            0x8B,0x44,0x24,0x04,0x89,0x44,0x24,0x28, // propagate flags
-            0x83,0xC4,0x08,0x61,0x9D           // popad; popfd
-        };
-        memcpy(at, restore, sizeof(restore)); at += sizeof(restore);
-        memcpy(at, replay, replayBytes); at += replayBytes;
-        Jump(at, resume);
+        const unsigned int size = vt::RuntimeHooks::BuildStub(at, origin, replayBytes, replay, dispatch);
+        Jump(at + size - 5, resume);
     }
 
     static unsigned char* LoadRoutine()
     {
-        FILE* file = fopen(VT_GAME_DIR "/gamemd.exe", "rb");
+        FILE* file = fopen((std::string(testGameDirectory) + "/" + game::ExeName).c_str(), "rb");
         if (!file) return NULL;
         fseek(file, 0, SEEK_END); const long size = ftell(file); rewind(file);
         std::vector<unsigned char> bytes(size);
@@ -92,7 +73,7 @@ namespace dimension_machine
         const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)bytes.data();
         const IMAGE_NT_HEADERS32* pe = (const IMAGE_NT_HEADERS32*)(bytes.data() + dos->e_lfanew);
         const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(pe);
-        const DWORD first = 0x433CF0, last = 0x433ED0, exitOffset = 0x433E7F - first;
+        const DWORD first = game::BitFont_GetTextDimension, last = game::Width_Helper, exitOffset = game::BitFont_DimensionDone - first;
         DWORD offset = 0;
         for (unsigned int i = 0; i < pe->FileHeader.NumberOfSections; ++i)
         {
@@ -121,7 +102,7 @@ namespace dimension_machine
             VirtualFree(code, 0, MEM_RELEASE); return NULL;
         }
         Stub(code + 0x240, code + 6, entryBytes, first, Entry);
-        Stub(code + 0x300, code + exitOffset + 6, exitBytes, 0x433E7F, Done);
+        Stub(code + 0x300, code + exitOffset + 6, exitBytes, game::BitFont_DimensionDone, Done);
         Jump(code, code + 0x240); code[5] = 0x90;
         Jump(code + exitOffset, code + 0x300); code[exitOffset + 5] = 0x90;
         FlushInstructionCache(GetCurrentProcess(), code, 4096);
@@ -132,7 +113,7 @@ namespace dimension_machine
     {
         boxEntryHook = (Hook)GetProcAddress(dll,"VT_Hook_Drawing_GetTextDimensions");
         boxDoneHook = (Hook)GetProcAddress(dll,"VT_Hook_Drawing_TextDimensionsDone");
-        FILE* file = fopen(VT_GAME_DIR "/gamemd.exe","rb");
+        FILE* file = fopen((std::string(testGameDirectory) + "/" + game::ExeName).c_str(),"rb");
         CHECK(file && boxEntryHook && boxDoneHook,"native sidebar background hooks exist");
         if (!file || !boxEntryHook || !boxDoneHook) { if (file) fclose(file); return; }
         fseek(file,0,SEEK_END); const long size = ftell(file); rewind(file);
@@ -140,16 +121,16 @@ namespace dimension_machine
         const IMAGE_DOS_HEADER* dos = (const IMAGE_DOS_HEADER*)bytes.data();
         const IMAGE_NT_HEADERS32* pe = (const IMAGE_NT_HEADERS32*)(bytes.data()+dos->e_lfanew);
         const IMAGE_SECTION_HEADER* sections = IMAGE_FIRST_SECTION(pe);
-        const DWORD first = 0x4A59E0, length = 0x6A;
+        const DWORD first = game::Drawing_GetTextDimensions, length = 0x6A;
         DWORD offset = 0;
         for (unsigned int i=0;i<pe->FileHeader.NumberOfSections;++i) {
             const DWORD base = pe->OptionalHeader.ImageBase + sections[i].VirtualAddress;
             if (first>=base && first+length<=base+sections[i].SizeOfRawData)
                 offset = sections[i].PointerToRawData + first-base;
         }
-        const unsigned char prologue[] = {0x53,0x55,0x56,0x57,0x8B,0x3D,0xD0,0xC4,0x89,0};
+        const unsigned char prologue[] = {0x53,0x55,0x56,0x57,0x8B,0x3D};
         const unsigned char epilogue[] = {0x89,0x7B,0x0C,0x5F,0x5E};
-        CHECK(offset && !memcmp(bytes.data()+offset,prologue,10) && !memcmp(bytes.data()+offset+0x60,epilogue,5),
+        CHECK(offset && !memcmp(bytes.data()+offset,prologue,6) && *(DWORD*)(bytes.data()+offset+6)==game::BitFont_Instance && !memcmp(bytes.data()+offset+0x60,epilogue,5),
               "background hook instructions match actual game");
         if (!offset) return;
         unsigned char* code = (unsigned char*)VirtualAlloc(NULL,4096,MEM_RESERVE|MEM_COMMIT,PAGE_EXECUTE_READWRITE);
@@ -163,7 +144,7 @@ namespace dimension_machine
         *(DWORD*)(code+6) = (DWORD)&boxFont;
         *(DWORD*)(code+0x12) = (DWORD)BoxWidth-(DWORD)(code+0x16);
         Stub(code+0x240,code+10,code,first,BoxEntry,10);
-        Stub(code+0x300,code+0x65,epilogue,0x4A5A40,BoxDone,5);
+        Stub(code+0x300,code+0x65,epilogue,game::Drawing_TextDimensionsDone,BoxDone,5);
         Jump(code,code+0x240); memset(code+5,0x90,5);
         Jump(code+0x60,code+0x300);
         FlushInstructionCache(GetCurrentProcess(),code,4096);
@@ -178,22 +159,22 @@ namespace dimension_machine
         const wchar_t* labels[] = { L"就绪", L"Ready" };
         for (const wchar_t* label : labels) for (int align=0;align<=2;++align) {
             const int flags=0x42|(align<<8);
-            boxCaller=0x6A9DD2;
+            boxCaller=game::Sidebar_WidthReturn + 1;
             int original[4]; measure(original,label,52,229,flags,2,1);
-            boxCaller=0x6A9DD1;
+            boxCaller=game::Sidebar_WidthReturn;
             vt::Takeover::MeasureTextInkY(bitFont,label,52,align,&ink);
             CHECK(measure(rect,label,52,229,flags,2,1)==rect &&
                   rect[0]==ink.left-2 && rect[2]==ink.right-ink.left+4 &&
                   rect[1]==229+ink.top-2 && rect[3]==ink.bottom-ink.top+4,
                   "native Ready and CJK backgrounds leave 2px on all sides at every alignment; ret 14h ABI intact");
             printf("sidebar padding: align=%d width=%d height=%d, 2px each side\n",align,rect[2],rect[3]);
-            boxCaller=0x6A9DD2;
+            boxCaller=game::Sidebar_WidthReturn + 1;
             measure(rect,label,52,229,flags,2,1);
             CHECK(!memcmp(rect,original,sizeof(rect)),"adjacent sidebar caller keeps its original rectangle");
         }
         int originalTab[4];
         measure(originalTab,L"A\tB",52,229,0x142,2,1);
-        boxCaller = 0x6A9DD1;
+        boxCaller = game::Sidebar_WidthReturn;
         measure(rect,L"A\tB",52,229,0x142,2,1);
         CHECK(!memcmp(rect,originalTab,sizeof(rect)),"unsupported label falls back to native rectangle");
         *(int*)((unsigned char*)bitFont+0x2C) = oldTracking;
@@ -218,11 +199,12 @@ namespace dimension_machine
         memcpy(messageRect,rect,sizeof(messageRect)); ++messageFillCount; messageOpacity=opacity;
         return 1;
     }
-    static void __cdecl MessageDispatch(REGISTERS* registers) { messageHook(registers); }
-    static void __cdecl PhobosMessageDispatch(REGISTERS* registers)
+    static DWORD __cdecl MessageDispatch(REGISTERS* registers) { messageHook(registers); return 0; }
+    static DWORD __cdecl PhobosMessageDispatch(REGISTERS* registers)
     {
         phobosMessageReturn=phobosMessageHook ? phobosMessageHook(registers) : 0;
-        CHECK(!phobosMessageReturn || phobosMessageReturn==0x623AAB,"Phobos returns its original continuation");
+        CHECK(!phobosMessageReturn || phobosMessageReturn==game::Message_Background + 20,"Phobos returns its original continuation");
+        return 0;
     }
     // Copy only the installed Phobos handler, never load/initialize Phobos in
     // this test host. Its three global reads are redirected to controlled data;
@@ -267,7 +249,7 @@ namespace dimension_machine
     static void CheckMessageBackground(HMODULE dll,void* bitFont,const wchar_t* text,unsigned char* measurementCode)
     {
         messageHook=(Hook)GetProcAddress(dll,"VT_Hook_Message_Background");
-        FILE* file=fopen(VT_GAME_DIR "/gamemd.exe","rb");
+        FILE* file=fopen((std::string(testGameDirectory) + "/" + game::ExeName).c_str(),"rb");
         CHECK(messageHook && file,"message background handler and native binary available");
         if(!messageHook || !file) { if(file)fclose(file); return; }
         fseek(file,0,SEEK_END); long size=ftell(file); rewind(file);
@@ -277,8 +259,8 @@ namespace dimension_machine
         auto section=IMAGE_FIRST_SECTION(pe); DWORD offset=0;
         for(unsigned i=0;i<pe->FileHeader.NumberOfSections;++i) {
             DWORD base=pe->OptionalHeader.ImageBase+section[i].VirtualAddress;
-            if(0x623A97>=base && 0x623AAB<=base+section[i].SizeOfRawData)
-                offset=section[i].PointerToRawData+0x623A97-base;
+            if(game::Message_Background>=base && game::Message_Background + 20<=base+section[i].SizeOfRawData)
+                offset=section[i].PointerToRawData+game::Message_Background-base;
         }
         const unsigned char expected[]={0x89,0x54,0x24,0x30,0x8D,0x44,0x24,0x30,0x8B,0x11,0x6A,0x00,0x50,0x89,0x6C,0x24,0x44,0xFF,0x52,0x14};
         CHECK(offset && !memcmp(bytes.data()+offset,expected,sizeof(expected)),"native message rectangle write and fill-call bytes verified");
@@ -303,10 +285,10 @@ namespace dimension_machine
         unsigned char* body=at;memcpy(at,bytes.data()+offset,sizeof(expected));at+=sizeof(expected);
         *at++=0x81;*at++=0xC4;*(DWORD*)at=0x1060;at+=4;
         *at++=0x5F;*at++=0x5E;*at++=0x5D;*at++=0x5B;*at++=0xC3;
-        Stub(code+0x300,body+8,expected,0x623A97,MessageDispatch,8);
+        Stub(code+0x300,body+8,expected,game::Message_Background,MessageDispatch,8);
         Jump(body,code+0x300);
         // Reproduce Syringe's Phobos return-zero/native or nonzero/skip split.
-        Stub(code+0x400,code+0x600,expected,0x623A9F,PhobosMessageDispatch,0);
+        Stub(code+0x400,code+0x600,expected,game::Message_Background + 8,PhobosMessageDispatch,0);
         Jump(body+8,code+0x400);
         at=code+0x600;
         *at++=0x83;*at++=0x3D;*(DWORD*)at=(DWORD)&phobosMessageReturn;at+=4;*at++=0;
@@ -317,7 +299,7 @@ namespace dimension_machine
         int width=0,height=0;
         vt::Takeover::InkY ink={};
         vt::Takeover::MeasureTextInkY(bitFont,text,0,0,&ink);
-        testCaller=0x433EE6;testParent=0x623A81;
+        testCaller=game::Width_Return;testParent=game::Message_WidthReturn;
         CHECK(((Measure)measurementCode)(bitFont,text,&width,&height,0),"message measurement capture completed by actual native body");
         messageFillCount=0;((void(__cdecl*)())code)();
         CHECK(messageFillCount==1 && messageRect[0]==point[0]+ink.left-2 && messageRect[2]==ink.right-ink.left+4 &&
@@ -331,9 +313,10 @@ namespace dimension_machine
         ((void(__cdecl*)())code)();
         CHECK(messageRect[1]==795 && messageRect[3]==22,"message capture is consumed once; absent capture keeps native rectangle");
         printf("task message: background height 22 -> %d, native 19px row spacing preserved\n",ink.bottom-ink.top+3);
-        unsigned char enabled=1,onNewMessages=0;
+                unsigned char enabled=1,onNewMessages=0;
         std::vector<unsigned char> scenarioBytes(0x35A3);void* scenario=scenarioBytes.data();void** scenarioGlobal=&scenario;
-        phobosMessageHook=LoadPhobosMessageHandler(code+0x500,&enabled,&onNewMessages,&scenarioGlobal);
+        if (game::kExeTimestamp == yra::kExeTimestamp)
+            phobosMessageHook=LoadPhobosMessageHandler(code+0x500,&enabled,&onNewMessages,&scenarioGlobal);
         FlushInstructionCache(GetCurrentProcess(),code,4096);
         if(phobosMessageHook) {
             for(int mode=0;mode<4;++mode) {
@@ -346,7 +329,7 @@ namespace dimension_machine
                         messageRect[1]==point[1]+ink.top-1 && messageRect[3]==ink.bottom-ink.top+3 && point[3]==20,
                         "installed Phobos handler receives compact rectangle, fills once, preserves native row metrics");
                     CHECK((mode==3 && phobosMessageReturn==0 && messageOpacity==-1) ||
-                        (mode<3 && phobosMessageReturn==0x623AAB && messageOpacity==(mode==0?40:70)),
+                        (mode<3 && phobosMessageReturn==game::Message_Background + 20 && messageOpacity==(mode==0?40:70)),
                         "Phobos enabled/disabled paths retain native transparency and continuation");
                     if(row==1)CHECK(messageRect[1]==bottom,"Phobos consecutive task rows join exactly without overlap");
                 }
@@ -371,50 +354,50 @@ namespace dimension_machine
         const wchar_t* objectives = L"任务目标一： 保护天气控制机\n任务目标二： 消灭敌军部队";
         int width = 0, height = 0, expected = 0;
         vt::Takeover::MeasureDynamicWidth(bitFont, objectives, 400, &expected);
-        testCaller = 0x553199; testParent = 0; argumentAtDone = 0;
+        testCaller = game::Loading_WidthReturn1; testParent = 0; argumentAtDone = 0;
         CHECK(measure(bitFont, objectives, &width, &height, 400), "original machine code returns success through real ret 10h");
         CHECK(argumentAtDone == 190, "original machine code overwrites text argument with 190px before exit hook");
         CHECK(width == expected && height == 40, "actual engine body plus installed hooks gives 208px and original 40px height");
         printf("native measurement: engine accumulator=%lu width=%d height=%d\n", argumentAtDone, width, height);
         const wchar_t* message = L"我们很快就会从三个不同的方向对尤里的巨塔发起攻击。";
         vt::Takeover::MeasureDynamicWidth(bitFont, message, 0, &expected);
-        testCaller = 0x433EE6; testParent = 0x623A81;
+        testCaller = game::Width_Return; testParent = game::Message_WidthReturn;
         CHECK(measure(bitFont, message, &width, &height, 0) && width == expected,
             "actual engine body plus message-background caller gets natural width with padding");
         CheckMessageBackground(dll,bitFont,message,code);
-        testCaller=0x433EE6;
+        testCaller=game::Width_Return;
         testParent = 0x5D4706;
         CHECK(measure(bitFont, message, &width, &height, 0) && width == LegacyWidth(message),
             "actual engine body keeps original wrapping-probe width");
         const wchar_t* tooltip = L"军械库\n-----------\n解锁科技\n技能:冰锥\n$800 \u231A00:41 \u26A1-50";
         CHECK(vt::Takeover::MeasureDynamicWidth(bitFont,tooltip,168,&expected),
             "mixed tooltip explicit lines fit sidebar surface with natural padding");
-        testCaller=0x4A5EF1;
+        testCaller=game::Ordinary_WidthReturn;
         CHECK(measure(bitFont,tooltip,&width,&height,168),"native tooltip baseline measurement succeeds");
         const int tooltipLegacy=width,tooltipHeight=height;
         vt::Takeover::InkY ink = {};
         CHECK(vt::Takeover::MeasureTextInkY(bitFont,tooltip,0,0,&ink),"mixed tooltip full vertical bounds measured");
-        testCaller=0x478F0B;
+        testCaller=game::Tooltip_WidthReturn;
         CHECK(measure(bitFont,tooltip,&width,&height,168) &&
               width==(expected>tooltipLegacy?expected:tooltipLegacy) && height==ink.bottom-ink.top,
               "native tooltip caller keeps width minimum and fits complete vertical ink");
         CHECK(ink.lines==5 && height<tooltipHeight,"tooltip trims outer cell slack without removing a row");
         printf("tooltip: width legacy=%d new=%d; height legacy=%d ink=%d plus-native-padding=4\n",tooltipLegacy,width,tooltipHeight,height);
-        testCaller=0x478F0C;
+        testCaller=game::Tooltip_WidthReturn + 1;
         CHECK(measure(bitFont,tooltip,&width,&height,168) && width==tooltipLegacy && height==tooltipHeight,
               "unrelated adjacent caller is not treated as tooltip");
         const wchar_t* narrowTooltip = L"-----------\nOK";
-        testCaller = 0x4A5EF1;
+        testCaller = game::Ordinary_WidthReturn;
         CHECK(measure(bitFont,narrowTooltip,&width,&height,168), "narrow tooltip legacy measurement");
         const int oldNarrow = width, oldNarrowHeight = height;
         vt::Takeover::MeasureDynamicWidth(bitFont,narrowTooltip,168,&expected);
         vt::Takeover::MeasureTextInkY(bitFont,narrowTooltip,0,0,&ink);
-        testCaller = 0x478F0B;
+        testCaller = game::Tooltip_WidthReturn;
         CHECK(measure(bitFont,narrowTooltip,&width,&height,168) && width == oldNarrow &&
               height == ink.bottom-ink.top && height < oldNarrowHeight, "tooltip shrinks vertically and keeps legacy width minimum");
         typedef DWORD(__cdecl* Hook)(REGISTERS*);
         Hook drawTooltip = (Hook)GetProcAddress(dll, "VT_Hook_BitText_DrawText");
-        DWORD tooltipFrame[11] = { 0x479041, (DWORD)bitFont, 0, (DWORD)narrowTooltip, 100, 12, (DWORD)(width + 8), (DWORD)(height+4) };
+        DWORD tooltipFrame[11] = { game::Tooltip_DrawReturn, (DWORD)bitFont, 0, (DWORD)narrowTooltip, 100, 12, (DWORD)(width + 8), (DWORD)(height+4) };
         REGISTERS tooltipRegs = {}; tooltipRegs.esp = (DWORD)tooltipFrame;
         CHECK(drawTooltip && drawTooltip(&tooltipRegs) == 0 && tooltipFrame[4]==100 &&
               tooltipFrame[5]==(DWORD)(12-ink.top) && tooltipFrame[6]==(DWORD)(width+8) &&
@@ -425,16 +408,16 @@ namespace dimension_machine
               "tooltip vertical capture is consumed once");
         printf("compact tooltip: width=%d unchanged; height=%d -> %d plus-native-padding=4; ink-top=%d\n",
                oldNarrow,oldNarrowHeight,height,ink.top);
-        testCaller=0x4A5EF1;
+        testCaller=game::Ordinary_WidthReturn;
         CHECK(measure(bitFont,tooltip,&width,&height,32),"automatically wrapped tooltip original measurement");
         const int wrappedWidth=width, wrappedHeight=height;
-        testCaller=0x478F0B;
+        testCaller=game::Tooltip_WidthReturn;
         CHECK(measure(bitFont,tooltip,&width,&height,32) && width==wrappedWidth && height==wrappedHeight,
               "automatically wrapped tooltip keeps native width and height");
-        testCaller = 0x553199;
+        testCaller = game::Loading_WidthReturn1;
         CHECK(!measure(bitFont, NULL, &width, &height, 400) && !width && !height,
             "actual engine failure epilogue returns original false/zero outputs");
-        testCaller = 0x4A5EF1;
+        testCaller = game::Ordinary_WidthReturn;
         CHECK(measure(bitFont, objectives, &width, &height, 400) && width == 190 && height == 40,
             "failed engine call leaves no saved width in unrelated subsequent call");
         *(int*)((unsigned char*)bitFont + 0x1C) = oldHeight;

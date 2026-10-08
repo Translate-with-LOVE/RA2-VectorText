@@ -5,6 +5,10 @@
 #include "PixelWriter.h"
 #include "Logger.h"
 #include "SyringeABI.h"
+#include "GameAddresses.h"
+#include "RuntimeHooks.h"
+#include "offline_test_host.h"
+#include <string>
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_OUTLINE_H
@@ -18,7 +22,8 @@
 static int failures = 0;
 #define CHECK(c, label) do { if (!(c)) { ++failures; printf("FAIL: %s\n", label); } } while (0)
 static const int W = 720, H = 64;
-static const unsigned int Caller = 0x43464D;
+static unsigned int Caller = game::String_BlitReturn;
+static const char* testGameDirectory = VT_GAME_DIR;
 static std::vector<unsigned char> fontData;
 static unsigned short pixels[W * H];
 static unsigned char font[128];
@@ -61,14 +66,23 @@ static unsigned int __stdcall ThreadProbe(void*)
 }
 
 #include "dimension_machine_check.h"
+#include "runtime_stub_check.h"
 #include "config_encoding_check.h"
 
 int main(int argc, char** argv)
 {
     if (argc>2 && !strcmp(argv[1],"--config-encoding")) return CheckConfigEncoding(argv[2]);
+    if (argc > 1 && !strcmp(argv[1], "--ra2"))
+    {
+        game::Select(true);
+        Caller = game::String_BlitReturn;
+        testGameDirectory = VT_RA2_GAME_DIR;
+    }
+    printf("native profile: %s; shared VectorText.dll\n", game::Version);
+    runtime_stub_check::Check();
     CHECK(GetModuleHandleA("Phobos.dll") == NULL && GetModuleHandleA("Ares.dll") == NULL,
           "regression process starts without Phobos or Ares");
-    FILE* f = fopen(VT_GAME_DIR "/game.fnt", "rb");
+    FILE* f = fopen(VT_FONT_DIR "/game.fnt", "rb");
     if (!f) return 2;
     fseek(f, 0, SEEK_END); long len = ftell(f); rewind(f);
     fontData.resize(len); fread(fontData.data(), 1, len, f); fclose(f);
@@ -429,18 +443,39 @@ int main(int argc, char** argv)
     CHECK(Lit() > 0, "negative origin clips safely at surface left edge");
 
     // Exercise the DLL hook adapters using Syringe's register-block layout.
-    HMODULE dll = LoadLibraryA("VectorText.dll");
+    HMODULE dll = LoadLibraryA(game::DllName);
     CHECK(dll != NULL, "installed DLL loads");
     CHECK(GetModuleHandleA("Phobos.dll") == NULL && GetModuleHandleA("Ares.dll") == NULL,
           "installed DLL loads without pulling in Phobos or Ares");
     if (dll)
     {
+        auto handshake = (SyringeHandshakeProc)GetProcAddress(dll, "SyringeHandshake");
+        CHECK(handshake != NULL, "version handshake exists");
+        if (handshake)
+        {
+            char status[128] = {};
+            SyringeHandshakeInfo host = {};
+            host.cbSize = sizeof(host);
+            host.cchMessage = sizeof(status);
+            host.Message = status;
+            host.exeTimestamp = game::kExeTimestamp;
+            CHECK(handshake(&host) == S_OK, "matching executable accepted");
+            host.exeTimestamp = game::kExeTimestamp == 0x3B1EBBED ? 0x3BDF544E : 0x3B1EBBED;
+            CHECK(handshake(&host) == S_OK, "same DLL also accepts the other supported game");
+            host.exeTimestamp = 0;
+            CHECK(handshake(&host) == S_FALSE, "unknown game version rejected");
+            host.cbSize = 0;
+            CHECK(handshake(&host) == S_FALSE, "incompatible handshake ABI rejected");
+            host.cbSize = sizeof(host);
+            host.exeTimestamp = game::kExeTimestamp;
+            CHECK(handshake(&host) == S_OK, "test profile restored after detection checks");
+        }
         typedef DWORD(__cdecl* Hook)(REGISTERS*);
         Hook blit = (Hook)GetProcAddress(dll, "VT_Hook_BitFont_Blit");
         Hook unlock = (Hook)GetProcAddress(dll, "VT_Hook_BitFont_Unlock");
         Hook boxHook = (Hook)GetProcAddress(dll, "VT_Hook_Drawing_LineBox");
         const char* entries[] = { "VT_Hook_BitFont_DrawString", "VT_Hook_BitText_LineBreak", "VT_Hook_BitText_LineWrap", "VT_Hook_BitText_LineLast" };
-        const DWORD callers[] = { 0x43464D, 0x434EA6, 0x4350E1, 0x4352BA };
+        const DWORD callers[] = { game::String_BlitReturn, game::Break_BlitReturn, game::Wrap_BlitReturn, game::Last_BlitReturn };
         CHECK(blit && unlock, "Blit/Unlock exports exist");
         CHECK(boxHook != NULL, "viewport hook exported");
         Hook dimensionsDone = (Hook)GetProcAddress(dll, "VT_Hook_BitFont_DimensionDone");
@@ -452,7 +487,7 @@ int main(int argc, char** argv)
         {
             DWORD stack[32] = {};
             int result = 190, height = 40;
-            stack[8] = 0x553199; stack[2] = (DWORD)font;
+            stack[8] = game::Loading_WidthReturn1; stack[2] = (DWORD)font;
             stack[10] = (DWORD)&result; stack[11] = (DWORD)&height; stack[12] = 400;
             REGISTERS r = {}; r.esp = (DWORD)stack; r.eax = 0xDEADBEEF;
             auto finishMeasurement = [&](const wchar_t* input) {
@@ -471,9 +506,9 @@ int main(int argc, char** argv)
                 "loading hook survives actual text argument overwritten with width");
             CHECK(result > 190 && height == 40 && r.eax == 0xDEADBEEF && r.esp == (DWORD)stack,
                 "loading hook widens old box, preserves height, return registers and stack");
-            result = 190; stack[8] = 0x4A5EF1;
+            result = 190; stack[8] = game::Ordinary_WidthReturn;
             CHECK(finishMeasurement(objectives) == 0 && result == 190, "ordinary layout measurement remains untouched");
-            result = 190; stack[8] = 0x433EE6; stack[13] = 0x623A81; stack[12] = 0;
+            result = 190; stack[8] = game::Width_Return; stack[13] = game::Message_WidthReturn; stack[12] = 0;
             int expectedWidth = 0; vt::Takeover::MeasureDynamicWidth(font, text, 0, &expectedWidth);
             CHECK(finishMeasurement(text) == 0 && result == expectedWidth && height == 40,
                 "message background survives overwritten text argument and gets natural width");
@@ -481,14 +516,14 @@ int main(int argc, char** argv)
             CHECK(dimensionsDone(&r) == 0 && result == 190, "saved measurement is consumed once");
             result = 190; stack[13] = 0x5D4706;
             CHECK(finishMeasurement(text) == 0 && result == 190, "message wrapping probe retains legacy metrics");
-            result = 190; stack[13] = 0x623A81;
+            result = 190; stack[13] = game::Message_WidthReturn;
             CHECK(finishMeasurement((const wchar_t*)1) == 0 && result == 190, "invalid string falls back without changing output");
-            result = 190; stack[8] = 0x5531EF; stack[12] = 400;
+            result = 190; stack[8] = game::Loading_WidthReturn2; stack[12] = 400;
             CHECK(finishMeasurement(objectives) == 0 && result == expectedObjectives, "second loading box measurement also survives argument mutation");
             const wchar_t* startupRows[] = {L"© 2000, 2001 美国艺电公司 保留所有权利",L"WESTWOOD STUDIOS\x0099 是美国艺电\x0099的一个品牌"};
-            const DWORD startupParents[] = {0x531459,0x5314B3};
+            const DWORD startupParents[] = {game::Startup_WidthReturn1,game::Startup_WidthReturn2};
             for(int row=0;row<2;++row) {
-                stack[8]=0x433EE6;stack[13]=startupParents[row];stack[12]=0;
+                stack[8]=game::Width_Return;stack[13]=startupParents[row];stack[12]=0;
                 int natural=0;vt::Takeover::MeasureDynamicWidth(font,startupRows[row],0,&natural);
                 int padding=vt::Cfg::ConfigInt("LineWidthPadding",4);padding=padding<1 ? 1 : padding>32 ? 32 : padding;
                 result=LegacyWidth(startupRows[row]);
@@ -507,7 +542,7 @@ int main(int argc, char** argv)
             dimensionsEntry(&r); result = 190; stack[9] = 190;
             r.esp = (DWORD)(stack + 1);
             CHECK(dimensionsDone(&r) == 0 && result == 190, "saved width cannot leak into another stack frame");
-            stack[8] = 0x4A5EF1;
+            stack[8] = game::Ordinary_WidthReturn;
             CHECK(finishMeasurement(text) == 0 && result == 190, "aborted capture is cleared by the next measurement");
         }
         for (int i = 0; i < 4 && blit && unlock; ++i)
@@ -544,7 +579,7 @@ int main(int argc, char** argv)
             const wchar_t* caption = L"我相信可以用它将部队送回之前的时间，jg";
             DWORD drawStack[32] = {};
             DWORD* draw = drawStack;
-            draw[0] = 0x6C9E7D; draw[1] = (DWORD)font; draw[3] = (DWORD)caption;
+            draw[0] = game::Subtitle_DrawDone; draw[1] = (DWORD)font; draw[3] = (DWORD)caption;
             const int nativeWidth = LegacyWidth(caption);
             bool reproduced = false;
             for (unsigned short color : {(unsigned short)0xFFE0, (unsigned short)0x07E0, (unsigned short)0x001F})
@@ -552,7 +587,7 @@ int main(int argc, char** argv)
                 Clear(); *(unsigned short*)(font + 36) = color;
                 REGISTERS r = {}; r.esp = (DWORD)draw;
                 subtitleEntry(&r);
-                DWORD coreStack[6] = {0x434BCF, (DWORD)caption, 20, 12, 0, 0};
+                DWORD coreStack[6] = {game::Print_StringReturn, (DWORD)caption, 20, 12, 0, 0};
                 r.ecx = (DWORD)font; r.esp = (DWORD)coreStack; core(&r);
                 int oldX = 20;
                 for (const wchar_t* p = caption; *p; ++p)
@@ -597,7 +632,7 @@ int main(int argc, char** argv)
                 wchar_t decorated[64];
                 swprintf(decorated, 64, L"%lc%ls", icons[sample], counters[sample]);
                 memset(pixels, 0, sizeof(pixels));
-                DWORD coreStack[6] = { 0x434BCF, (DWORD)decorated, 20, 12, 0, 0 };
+                DWORD coreStack[6] = { game::Print_StringReturn, (DWORD)decorated, 20, 12, 0, 0 };
                 REGISTERS r = {}; r.ecx = (DWORD)font; r.esp = (DWORD)coreStack;
                 CHECK(core(&r) == 0 && r.esp == (DWORD)coreStack,
                       "counter DrawString hook preserves original stack without Phobos");
@@ -634,7 +669,7 @@ int main(int argc, char** argv)
             REGISTERS r = {}; r.ebx = (DWORD)font; r.edi = (DWORD)rect;
             r.esi = oldX; r.ebp = 12; r.esp = (DWORD)boxStack;
             CHECK(boxHook(&r) == 0, "viewport adapter replays original instruction");
-            DWORD coreStack[6] = { 0x434BCF, (DWORD)s, (DWORD)oldX, 12, 0, 0 };
+            DWORD coreStack[6] = { game::Print_StringReturn, (DWORD)s, (DWORD)oldX, 12, 0, 0 };
             r.ecx = (DWORD)font; r.esp = (DWORD)coreStack;
             core(&r);
             DWORD call[5] = { Caller, 'A', (DWORD)oldX, 12, (DWORD)-1 }; r.esp = (DWORD)call;

@@ -13,6 +13,7 @@ if "%~1"=="--perf-only" goto performance
 if "%~1"=="--fractional-only" goto fractional
 if "%~1"=="--stretch-only" goto stretched
 if "%~1"=="--parity-only" goto parity
+if "%~1"=="--startup-only" goto startup
 for %%R in (direct3d9 opengl gdi) do (
     >ddraw.ini echo [ddraw]
     >>ddraw.ini echo renderer=%%R
@@ -125,6 +126,17 @@ set "RC=%ERRORLEVEL%"
 copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
 popd
 exit /b %RC%
+
+:startup
+for %%R in (direct3d9 opengl gdi) do (
+    copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+    call :configure2 3840 2160 %%R
+    echo [*] %%R: one-shot 4K startup, no repaint or second upload
+    cnc_present_test.exe --startup 6 4.5
+    if errorlevel 1 (popd & exit /b 1)
+)
+popd
+exit /b 0
 
 :parity_checks
 for %%R in (direct3d9 opengl gdi) do (

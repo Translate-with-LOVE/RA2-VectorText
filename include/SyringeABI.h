@@ -23,7 +23,9 @@
 //
 //  Registering hooks: either an external "<dllname>.inj" text file
 //  (ADDRESS = ExportName, SizeInHex) or a ".syhks00" section embedded in the
-//  DLL.  This project uses the section, exactly like Phobos does.  The section
+//  DLL. This project registers its common bootstrap in that section; text
+//  handlers are installed after the game profile and native bytes are verified.
+//  The section
 //  holds 16-byte aligned records of
 //
 //      struct hookdecl { u32 hookAddr; u32 hookSize; const char* hookName; };

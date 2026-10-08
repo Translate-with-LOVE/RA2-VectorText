@@ -60,13 +60,34 @@ HRESULT WINAPI HookPrimitive(void *object, D3DPRIMITIVETYPE type, UINT start, UI
             auto &t = it->second;
             float sx = 0, sy = 0;
             const bool scaled = OutputScale(t, vertices, sx, sy);
+            // A static startup frame may never be uploaded again after this
+            // first quad reveals its viewport. Finish its pending promotion
+            // using the immutable metadata and pixels from that same upload.
+            if (scaled && !t.cleanWorld && t.framePlane &&
+                SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &saved)))
+            {
+                t.device = device;
+                if (UploadOverlay(t, *t.framePlane))
+                {
+                    D3DLOCKED_RECT lock{};
+                    const auto lockTexture = (TextureLock)Original(texture, 19);
+                    const auto unlockTexture = (TextureUnlock)Original(texture, 20);
+                    if (SUCCEEDED(lockTexture(texture, 0, &lock, &t.rect, 0)))
+                    {
+                        const int width = t.rect.right - t.rect.left;
+                        t.framePlane->BackgroundRect(t.scratch.data(), width, (uint32_t *)lock.pBits,
+                                                    lock.Pitch / 4, {0, 0, width, t.rect.bottom - t.rect.top});
+                        t.cleanWorld = SUCCEEDED(unlockTexture(texture, 0));
+                    }
+                }
+            }
             const bool doubled = fabs(sx - t.rasterScale) < 0.0001f && fabs(sy - t.rasterScale) < 0.0001f;
-            if(scaled) SetOutputRasterScale((int)ceil(std::min(8.0f,std::max(sx,sy))-0.0001f));
+            ObserveOutput(sx, sy, t.rasterScale);
             if (scaled && !t.overlayAttempted)
             {
                 t.overlayAttempted = true;
                 t.device = device;
-                if (ResizeAtlas(t, primary->plane.TileCount()))
+                if (t.overlay || ResizeAtlas(t, t.framePlane ? t.framePlane->TileCount() : 0))
                 {
                     t.overlayReady = true;
                 }
@@ -84,14 +105,16 @@ HRESULT WINAPI HookPrimitive(void *object, D3DPRIMITIVETYPE type, UINT start, UI
             if (!scaled)
                 t.reportedScale = t.reportedScaleY = 0;
             // Only frames whose world upload excluded its old text get an
-            // overlay. First frame and any failure keep the 1x composition.
+            // overlay. Any promotion failure keeps the complete 1x frame.
             const auto overlayStart = Stamp();
             overlay = t.cleanWorld && t.overlay && !t.overlayTiles.empty() &&
-                      SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &saved));
+                      (saved || SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &saved)));
             // Readiness describes the observed output, not whether an atlas
             // is currently allocated. UploadOverlay can recreate an atlas
             // after a density change or retry a transient allocation failure.
             t.overlayReady = scaled && t.device;
+            if (t.cleanWorld || !scaled)
+                t.framePlane.reset(); // keep a failed first-frame promotion available for retry
             if (overlay)
             {
                 const HRESULT hr = original(object, type, start, count);
@@ -129,6 +152,8 @@ HRESULT WINAPI HookPrimitive(void *object, D3DPRIMITIVETYPE type, UINT start, UI
                 texture->Release();
                 return hr;
             }
+            if (saved)
+                saved->Release();
         }
     }
     texture->Release();
@@ -221,7 +246,8 @@ HRESULT WINAPI HookTextureUnlock(void *object, UINT level)
                             PixelPlane::Expand565(t.scratch[(size_t)y * w + x]);
             }
             t.locked = false;
-            t.framePlane.reset();
+            if (t.cleanWorld || !state->autoTextScale)
+                t.framePlane.reset(); // otherwise the first quad can promote a one-shot frame
         }
     }
     return original(object, level);

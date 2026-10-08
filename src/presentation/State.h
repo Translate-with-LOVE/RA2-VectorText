@@ -79,6 +79,8 @@ struct State
     std::map<void *, Texture> textures;
     PlaneOptions options;
     void *primary = nullptr;
+    HWND window = nullptr;
+    bool outputObserved = false;
     Statistics stats{};
     bool enabled = false;
     bool autoTextScale = false;
@@ -135,6 +137,7 @@ bool __fastcall HookGameCopy(void *dest, const int *dr, void *source, const int 
 bool __fastcall HookGameFill(void *object, void *, const int *clip, const int *rect, DWORD color);
 HRESULT WINAPI HookCreateSurface(void *object, void *desc, void **output, IUnknown *outer);
 HRESULT WINAPI HookDDQuery(void *object, REFIID iid, void **output);
+HRESULT WINAPI HookCooperativeLevel(void *object, HWND window, DWORD flags);
 bool Detour(HMODULE module, const char *name, void *replacement, void **original);
 bool InstallGdi();
 bool InstallOpenGL();

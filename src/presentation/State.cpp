@@ -62,10 +62,9 @@ int Draw(const Target &t, const GlyphCell &cell, int x, int y, int rows, unsigne
     const auto found = state->buffers.find(t.base);
     if (found == state->buffers.end() || found->second->pitch != t.pitch)
         return -1;
-    // The cached loading image can be painted before the first GPU upload.
-    // Its compatibility pixels remain available until a presenter is ready.
-    if (!state->stats.backend && !found->second->cpuText)
-        return -1;
+    // Both the primary startup image and the cached CPU loading image can
+    // be painted before any presenter runs (especially GDI). Retain them
+    // immediately; compatibility pixels cover the interval until it is ready.
     const auto start = Stamp();
     found->second->plane.Paint(cell, x, y, rows, color, {t.clipL, t.clipT, t.clipR + 1, t.clipB + 1},
                                found->second->base, found->second->pitch, SubtitleOutlineActive());
@@ -140,6 +139,7 @@ bool ObserveOutput(float sx, float sy, int raster)
 {
     const bool scaled = state->autoTextScale && std::isfinite(sx) && std::isfinite(sy) && sx > 1.001f && sy > 1.001f;
     Guard guard;
+    state->outputObserved = true;
     state->outputScaleX = scaled ? sx : 0;
     state->outputScaleY = scaled ? sy : 0;
     state->outputRaster = scaled ? raster : 0;

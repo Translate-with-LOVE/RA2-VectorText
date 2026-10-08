@@ -25,6 +25,12 @@ static void Pump(DWORD duration) {
     }
 }
 static int errors=0;
+static HWND cooperativeWindow=nullptr;
+static DWORD cooperativeFlags=0;
+static HRESULT cooperativeResult=S_OK;
+static HRESULT WINAPI OfflineCooperative(void*,HWND hwnd,DWORD flags) {
+    cooperativeWindow=hwnd;cooperativeFlags=flags;return cooperativeResult;
+}
 static bool __fastcall CpuCopy(void* object,const int* dr,void* source,const int* sr,
                                void* copier,int,int,int,int) {
     auto dest=*(LPDIRECTDRAWSURFACE*)((char*)object+0x1C);
@@ -148,6 +154,56 @@ static double AtlasSample(const vt::Presentation32::TestOverlay& frame,int x,int
     return 0;
 }
 int main(int argc,char** argv) {
+    if(argc>1 && !strcmp(argv[1],"--startup-offline")) {
+        const bool enabled=argc<3 || strcmp(argv[2],"disabled");
+        if(!enabled) {
+            char ini[MAX_PATH]{};GetModuleFileNameA(nullptr,ini,MAX_PATH);
+            strcpy(strrchr(ini,'\\')+1,"VectorText.ini");
+            WritePrivateProfileStringA("VectorText","HiDPI","false",ini);
+        }
+        vt::Presentation32::TestCpuTextStart();
+        vt::SetOutputRasterScale(2);
+        WNDCLASSA wc{};wc.lpfnWndProc=DefWindowProcA;wc.hInstance=GetModuleHandle(nullptr);
+        wc.lpszClassName="VTStartupDensity";RegisterClassA(&wc);
+        window=CreateWindowA(wc.lpszClassName,"VectorText hidden startup test",WS_POPUP,
+            0,0,3840,2160,nullptr,nullptr,wc.hInstance,nullptr);
+        Check(window!=nullptr,"hidden 4K output window");
+        void* ddTable[21]{};ddTable[20]=(void*)OfflineCooperative;
+        void** dd=ddTable;
+        void* surfaceTable[34]{};surfaceTable[22]=(void*)OfflineDesc;
+        std::vector<unsigned short> pixels(640*480);
+        OfflineDDS surface{surfaceTable,pixels.data(),640,480};
+        cooperativeResult=E_FAIL;
+        Check(FAILED(vt::Presentation32::TestCooperativeLevel(&dd,window,DDSCL_NORMAL)),
+            "cooperative-level failure propagates");
+        vt::Presentation32::TestPrimaryTrack(&surface);
+        Check(vt::OutputRasterScale()==2,"failed window binding cannot change startup density");
+        cooperativeResult=S_OK;
+        Check(SUCCEEDED(vt::Presentation32::TestCooperativeLevel(&dd,window,DDSCL_NORMAL)) &&
+            cooperativeWindow==window && cooperativeFlags==DDSCL_NORMAL,"cooperative window arguments preserved");
+        vt::Presentation32::TestPrimaryTrack(&surface);
+        Check(vt::OutputRasterScale()==(enabled ? 6 : 2) && !vt::Presentation32::Stats().backend,
+            "startup density respects HiDPI switch before any renderer presents a frame");
+        vt::GlyphSource font; font.SetAntiAlias(true);font.SetFitToAdvance(false);font.SetHighResolution(enabled);
+        Check(font.Init("C:\\Windows\\Fonts\\arial.ttf",16,400),"startup vector face");
+        const auto* low=font.Get('W',-1);
+        const int advance=low ? low->advanceQ : 0;
+        font.SetHighResolutionScale(vt::OutputRasterScale());
+        const auto* glyph=font.Get('W',-1);
+        Check(glyph && glyph->advanceQ==advance &&
+            (enabled ? glyph->raster2 && glyph->raster2->scale==6 : !glyph->raster2),
+            "one-shot startup glyph keeps its advance and only allocates enabled HiDPI samples");
+        if(glyph) {
+            vt::Target target{pixels.data(),640,0,0,639,479};
+            vt::DrawCellAA(target,*glyph,10,10,16,0xFFFF,vt::RGB565);
+            Check(vt::Presentation32::Stats().glyphs==1 && vt::Presentation32::TestRetainedRaster(&surface)==(enabled ? 6 : 2),
+                "primary startup text is retained before backend activation");
+        }
+        vt::Presentation32::TestOutputScale(2.5f,2.5f);
+        vt::Presentation32::TestPrimaryTrack(&surface);
+        Check(vt::OutputRasterScale()==(enabled ? 3 : 2),"final viewport respects HiDPI switch and remains authoritative");
+        DestroyWindow(window);vt::Log::Shutdown();return errors?1:0;
+    }
     if(argc>1 && !strcmp(argv[1],"--movie-frames")) {
         vt::Presentation32::TestCpuTextStart();
         unsigned char cache[0x24]{},screen[0x24]{};void* cacheTable[34]{},*screenTable[34]{},*ddsTable[34]{},*textureTable[21]{};
@@ -370,7 +426,8 @@ int main(int argc,char** argv) {
         printf("CPU text: %s\n",errors?"FAIL":"PASS");return errors?1:0;
     }
     const bool perf2=argc>1 && !strcmp(argv[1],"--perf-2x");
-    const bool fractional=argc>2 && !strcmp(argv[1],"--fractional");
+    const bool startup=argc>2 && !strcmp(argv[1],"--startup");
+    const bool fractional=argc>2 && (!strcmp(argv[1],"--fractional") || startup);
     const float requestedScale=fractional ? (float)atof(argv[2]) : 1;
     const float requestedScaleY=fractional && argc>3 ? (float)atof(argv[3]) : requestedScale;
     const bool compat2=argc>1 && !strcmp(argv[1],"--compat-2x");
@@ -385,6 +442,9 @@ int main(int argc,char** argv) {
         WritePrivateProfileStringA("VectorText","PresentProfile","1",ini);
     }
     vt::Log::Prepare();
+    // Recent wrappers install their own executable import hooks at load time.
+    // Match the game's statically imported DLL order before patching imports.
+    HMODULE module=(argc>1 && !strcmp(argv[1],"--no-cnc")) ? nullptr : LoadLibraryA("ddraw.dll");
     vt::Presentation32::PrepareEarly();
     if(argc>1 && !strcmp(argv[1],"--no-cnc")) {
         wchar_t path[MAX_PATH]{}; GetSystemDirectoryW(path,MAX_PATH);
@@ -413,7 +473,6 @@ int main(int argc,char** argv) {
     // Pixel checks must sample the renderer rather than an overlapping app.
     // Keep this short-lived QA window visible without taking keyboard focus.
     SetWindowPos(window,HWND_TOPMOST,80,80,0,0,SWP_NOSIZE|SWP_NOACTIVATE);
-    HMODULE module=LoadLibraryA("ddraw.dll");
     if(!module) return 2;
     using Create=HRESULT(WINAPI*)(GUID*,LPDIRECTDRAW*,IUnknown*);
     auto create=(Create)GetProcAddress(module,"DirectDrawCreate");
@@ -429,20 +488,26 @@ int main(int argc,char** argv) {
     if(!primary) return 2;
     DDBLTFX fill{}; fill.dwSize=sizeof(fill);
     primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);
-    Pump(800);
+    if(!startup) Pump(800);
     auto stats=vt::Presentation32::Stats();
     printf("backend=%ld frames=%ld surfaces=%ld\n",stats.backend,stats.frames,stats.surfaces);
     const bool expectFallback=argc>1 && !strcmp(argv[1],"--fallback");
-    Check(expectFallback ? !stats.backend : stats.backend>0,"presentation activation");
+    if(!startup) Check(expectFallback ? !stats.backend : stats.backend>0,"presentation activation");
     if(fractional) {
         const int density=std::max(2,std::min(8,(int)ceil(std::max(requestedScale,requestedScaleY)-0.0001f)));
+        if(startup) Check(vt::OutputRasterScale()==density,
+            "startup raster density is ready before painting the static image");
         vt::GlyphRaster2 hi;hi.scale=density;hi.width=hi.rows=16*density;hi.coverage.assign(hi.width*hi.rows,192);
         vt::GlyphCell mark{};mark.inkRows=16;mark.raster2=&hi;
         for(int y=0;y<16;++y) for(int x=0;x<16;++x) mark.cov[y*24+x]=128;
         DDSURFACEDESC d{};d.dwSize=sizeof(d);primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
         vt::Target t{(unsigned short*)d.lpSurface,d.lPitch/2,0,0,639,479};
         vt::DrawCellAA(t,mark,25,10,16,0xFFFF,vt::RGB565);primary->Unlock(nullptr);Pump(500);
-        primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(300);
+        if(startup) {
+            const DWORD started=GetTickCount();
+            while(!vt::Presentation32::TestObservedScale() && GetTickCount()-started<5000) Pump(50);
+        }
+        if(!startup) {primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(300);}
         const bool enabled=vt::Cfg::HiDPI();
         const float actualScale=vt::Presentation32::TestObservedScale();
         const float actualScaleY=vt::Presentation32::TestObservedScale(true);
@@ -458,6 +523,17 @@ int main(int argc,char** argv) {
         printf("fractional tile-seam pixel=%d expected=%d\n",actual,ref);
         Check(abs(actual-ref)<=4,"fractional tile junction has continuous high-resolution coverage");
         ReleaseDC(window,dc);
+        if(startup) {
+            bool stable=true;
+            for(int frame=0;frame<12;++frame) {
+                Pump(80);dc=GetDC(window);
+                const int pixel=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY)));
+                ReleaseDC(window,dc);stable=stable && abs(pixel-ref)<=4;
+            }
+            Check(stable,"one-shot startup upload stays HiDPI without another surface lock or upload");
+            primary->Release();dd->Release();DestroyWindow(window);vt::Log::Shutdown();
+            return errors?1:0;
+        }
         primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);
         dc=GetDC(window);
         Check(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY))==RGB(0,0,0),

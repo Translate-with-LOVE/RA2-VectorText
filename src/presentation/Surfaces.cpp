@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "State.h"
 
 // DirectDraw/BSurface lifetime, native copy/fill and sparse sidecar propagation.
@@ -27,7 +28,33 @@ std::shared_ptr<Buffer> Remember(void *object, const DDSURFACEDESC2 &d)
     surface.desc = d;
     surface.buffer = b;
     if (d.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+    {
         state->primary = object;
+        // Startup text is cached before the renderer's first screen quad/DIB.
+        // Use the real output window as an initial density bound, so those
+        // one-shot glyphs are already sharp when the first overlay is ready.
+        // The final viewport remains authoritative once a presenter runs.
+        WINDOWINFO windowInfo{sizeof(WINDOWINFO)};
+        if (state->autoTextScale && !state->outputObserved && state->window &&
+            GetWindowInfo(state->window, &windowInfo))
+        {
+            // GetClientRect is virtualized to the game's logical dimensions
+            // by cnc-ddraw. WINDOWINFO retains the physical client rectangle.
+            const LONG width = windowInfo.rcClient.right - windowInfo.rcClient.left;
+            const LONG height = windowInfo.rcClient.bottom - windowInfo.rcClient.top;
+            const float sx = width / (float)d.dwWidth, sy = height / (float)d.dwHeight;
+            if (sx > 1.001f && sy > 1.001f)
+            {
+                const int density = (int)std::ceil(std::min(8.0f, std::max(sx, sy)) - 0.0001f);
+                if (OutputRasterScale() != std::max(2, density))
+                {
+                    SetOutputRasterScale(density);
+                    Log::Note("Present32: startup raster=%d window=%ldx%ld logical=%ux%u before first presentation",
+                              OutputRasterScale(), width, height, d.dwWidth, d.dwHeight);
+                }
+            }
+        }
+    }
     state->stats.surfaces = (LONG)state->surfaces.size();
     return b;
 }
@@ -65,7 +92,7 @@ bool GameDescription(void *object, DDSURFACEDESC2 &d, void *&native)
     // DSurface's type-query slot is shared by every native DSurface.
     // Other XSurfaces own their buffer directly at +14; do not interpret
     // their allocator at +1C as an IDirectDrawSurface pointer.
-    if ((uintptr_t)(*(void ***)object)[33] == 0x4C1AB0)
+    if ((uintptr_t)(*(void ***)object)[33] == game::DSurface_Type)
     {
         native = *(void **)((char *)object + 0x1C);
         return Describe(native, d);
@@ -173,7 +200,7 @@ bool __fastcall HookGameCopy(void *dest, const int *dr, void *source, const int 
     std::unique_ptr<PixelPlane> saved;
     PixelRect d{}, s{};
     const uintptr_t operation = copier ? *(uintptr_t *)copier : 0;
-    if (state->enabled && (operation == 0x7F7BC4 || operation == 0x7F7BF4) && !remap && mode == 3 && amount == 1000 &&
+    if (state->enabled && (operation == game::Copier_Opaque || operation == game::Copier_Keyed) && !remap && mode == 3 && amount == 1000 &&
         !extra && GameDescription(dest, dd, dn) && dn && GameDescription(source, sd, sn) &&
         GameRects(dr, dd, sr, sd, d, s))
     {
@@ -192,13 +219,13 @@ bool __fastcall HookGameCopy(void *dest, const int *dr, void *source, const int 
                            : sb     ? &sb->plane
                                     : nullptr,
                            s, d, (unsigned short *)sd.lpSurface, sd.lPitch / 2, db->base, db->pitch,
-                           operation == 0x7F7BF4, 0, 0);
+                           operation == game::Copier_Keyed, 0, 0);
             state->stats.copyMs += Elapsed(copyStart);
             ++state->stats.copies;
             static LONG logged = 0;
             if (InterlockedIncrement(&logged) <= 3)
                 Log::Note("Present32: native CPU copy text sync dest=(%d,%d,%d,%d) keyed=%d", d.left, d.top,
-                          d.right - d.left, d.bottom - d.top, operation == 0x7F7BF4);
+                          d.right - d.left, d.bottom - d.top, operation == game::Copier_Keyed);
         }
     }
     // The copy locks DDS buffers internally before moving compatibility
@@ -479,6 +506,17 @@ void TrackSurface(void *object)
     }
 }
 using CreateSurface = HRESULT(WINAPI *)(void *, void *, void **, IUnknown *);
+using CooperativeLevel = HRESULT(WINAPI *)(void *, HWND, DWORD);
+HRESULT WINAPI HookCooperativeLevel(void *object, HWND window, DWORD flags)
+{
+    const HRESULT hr = ((CooperativeLevel)Original(object, 20))(object, window, flags);
+    if (SUCCEEDED(hr))
+    {
+        Guard guard;
+        state->window = window;
+    }
+    return hr;
+}
 HRESULT WINAPI HookCreateSurface(void *object, void *desc, void **output, IUnknown *outer)
 {
     HRESULT hr = ((CreateSurface)Original(object, 6))(object, desc, output, outer);
@@ -493,6 +531,7 @@ HRESULT WINAPI HookDDQuery(void *object, REFIID iid, void **output)
     {
         Patch(*output, 0, (void *)HookDDQuery);
         Patch(*output, 6, (void *)HookCreateSurface);
+        Patch(*output, 20, (void *)HookCooperativeLevel);
     }
     return hr;
 }

@@ -1,6 +1,7 @@
 # VectorText
 
-由 Syringe 加载的 32 位矢量文字补丁，直接挂接 `gamemd.exe 1.001` 的原生文字函数。
+由 Syringe 加载的 32 位矢量文字补丁。同一个 `VectorText.dll` 自动识别
+原版 RA2 `game.exe 1.006TUC` 和尤里复仇 `gamemd.exe 1.001`，挂接各自的原生文字函数。
 不依赖 Phobos、Ares 或 cnc-ddraw，FreeType 静态链接进 DLL。
 最低运行系统为 **Windows 7**，DLL 使用 x86 及静态 C/C++ 运行库，也可在 64 位 Windows 的游戏进程中加载。
 
@@ -33,6 +34,10 @@ build.bat
 已有 `VectorText.ini` 会保留；不存在时复制默认配置。可设置 `VT_VCVARS`、`VT_CMAKE` 指定工具路径；
 `VT_VCVARS_VER` 指定兼容 Win7 的工具集版本，默认 `14.44`，也允许 `14.29` 或 `14.3x/14.4x`。
 可分发文件集中在 `build/cmake/bin/`：DLL、示例 INI、最终说明、GPL 协议和第三方许可。
+原版与尤里复仇使用同一份 DLL、配置和三个呈现后端。手动安装时将 `VectorText.dll`
+放到对应游戏目录，在该目录运行 `Syringe.exe game.exe` 或 `Syringe.exe gamemd.exe`。
+识别结果写入 `VectorText.log` 的 `profile:` 行，不需要切换构建或设置游戏版本。
+加载时会核对 PE 身份、共同加载入口及全部 16 个文字入口的原始指令；未知或不匹配的程序拒绝接管。
 部署另外将许可放入游戏目录的 `VectorText-licenses/`，避免覆盖游戏自身的许可文件。
 在上述兼容工具集的 x86 Native Tools 命令行中，也可以直接使用：
 
@@ -42,6 +47,17 @@ cmake --build --preset x86-release
 ctest --preset offline
 cmake --build --preset deploy
 ```
+
+要同时运行原版 RA2 的原生机器码回归，配置游戏路径后运行同一套测试：
+
+```bat
+cmake --preset x86-release "-DVT_RA2_GAME_DIR=F:/SteamLibrary/steamapps/common/Command & Conquer Red Alert II"
+cmake --build --preset x86-release
+ctest --preset offline
+```
+
+`line_ra2` 使用同一个测试 EXE 和 DLL，执行原版的测量代码并验证字幕擦除、启动混排与返回跳板；
+`unsupported_host` 检查未知程序在安装任何钩子前被拒绝。
 
 离线 CTest 覆盖全部非显示测试；`cnc_present_test.bat` 验证实际显示后端，需桌面环境。
 每个测试 `.bat` 仍可单独执行，编译均调用同一套 CMake 目标。
@@ -57,6 +73,7 @@ cmake --build --preset deploy
 | 入口或模块 | 职责 |
 | --- | --- |
 | `src/Hooks.cpp`、`src/hooks/` | Syringe ABI、行入口与返回跳板；文本观测、尺寸测量、背景调整分别实现。 |
+| `include/GameAddresses.h`、`src/RuntimeHooks.*`、`RuntimeHookStub.cpp` | 自动选择 RA2/YR 地址表，校验并安装文字 hook；保留寄存器、标志和原生栈约定。 |
 | `src/Takeover.cpp`、`src/takeover/` | 字体初始化与逐字回退；整行排版、只读测量、诊断统计分别实现。 |
 | `src/GlyphSource.*`、`src/glyph/` | 字形缓存入口；字体管理、配置与度量、轮廓调整、覆盖率生成分别实现。 |
 | `src/PixelWriter.*`、`src/PixelPlane.*` | 像素绘制与稀疏文字层。 |
@@ -73,6 +90,9 @@ cmake --build --preset deploy
 **默认值**表示代码在该项缺失时使用的值。完整配置文件见 [VectorText.ini](VectorText.ini)。
 布尔值不区分大小写，支持 `true/false`、`yes/no`、`on/off` 和 `1/0`。布尔项缺失或无效时使用默认值；整数、浮点数和枚举按各自规则解析。
 字号、基线及边距使用游戏逻辑像素；三个后端的 HiDPI 均保留独立的 2～8× 字形采样，按实际画面倍率合成，不改变文字的视觉尺寸。
+启动画面在首次绘字前按真实客户区预选密度，640×480→4K 使用 6× 字形，1920×1080→4K 使用 2×。
+D3D9 的一次性启动图在首次呈现时直接建立高清文字图集，GDI 也保留后端启动前绘制的文字。
+`cnc_present_test.bat --startup-only` 检查三后端的 4K 静态启动图，无需再次锁定表面或上传。
 
 | 参数 | 默认值 | 作用与取值 |
 | --- | --- | --- |
@@ -132,10 +152,10 @@ cmake --build --preset deploy
 | `takeover_test.bat` | 单行拒绝后的逐字接管、颜色、抗锯齿、裁剪和缺字回退 |
 | `hooktest_draw.bat --mode draw` | 逐字 hook 的 ESP/EAX、返回跳板与拒绝路径；仅支持 `off`、`observe`、`draw` |
 | `python tools\preview_guides.py` | 显示上、中、下辅助线与实际墨迹范围，完整行按最近邻放大 |
-| `python tools\verify_dll.py` | DLL 导出、16 条钩子记录、字幕擦除机器码、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
+| `python tools\verify_dll.py [DLL] [游戏 EXE]` | DLL 导出、共同加载 hook、16 个运行时文字入口、字幕擦除机器码、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
 
 预览图输出到 `build/render-qa/`。离线通过仍需结合实际游戏画面验收。
-当前 27 项离线 CTest 通过，包含字幕换色后的完整擦除、高清采样边缘、加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数和非等比倍率采样对照。
+当前 31 项离线 CTest 通过，包含 RA2/YR 原生入口、未知程序拒绝、首帧 HiDPI、字幕换色后的完整擦除、高清采样边缘、加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数和非等比倍率采样对照。
 本机三后端的精确 2×、4.8×3.6、连续窗口缩放、字幕密度切换、两种混合模式及关闭 HiDPI 检查均通过。
 三后端共享字号、混排基线、字幕描边和独立高清采样；GDI 使用 CPU 合成，性能不与 GPU 后端等同，驱动的颜色舍入也可能有细小差异。其他机器、驱动和 cnc-ddraw 版本仍需验证。
 游戏目录的 `VectorText.log` 记录 `LINE ready`、`LINE fallback`、`LINE native icon`

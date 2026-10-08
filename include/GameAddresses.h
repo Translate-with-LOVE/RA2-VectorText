@@ -1,0 +1,140 @@
+// SPDX-FileCopyrightText: 2026 VectorText contributors
+// SPDX-License-Identifier: GPL-3.0-only
+#pragma once
+#include "YRAddresses.h"
+#include "RA2Addresses.h"
+
+// One selected address table per process, including the shared layout code.
+namespace game
+{
+inline unsigned int kExeSize = yra::kExeSize;
+inline unsigned int kExeTimestamp = yra::kExeTimestamp;
+inline unsigned int kExeCRC = yra::kExeCRC;
+inline unsigned int BitFont_Instance = yra::BitFont_Instance;
+inline unsigned int BitText_Instance = yra::BitText_Instance;
+inline unsigned int Drawing_GetTextDimensions = yra::Drawing_GetTextDimensions;
+inline unsigned int Drawing_GetTextDimensionsSz = yra::Drawing_GetTextDimensionsSz;
+inline unsigned int Drawing_TextDimensionsDone = yra::Drawing_TextDimensionsDone;
+inline unsigned int Drawing_TextDimensionsDoneSz = yra::Drawing_TextDimensionsDoneSz;
+inline unsigned int Message_Background = yra::Message_Background;
+inline unsigned int Message_BackgroundSz = yra::Message_BackgroundSz;
+inline unsigned int BitFont_GetTextDimension = yra::BitFont_GetTextDimension;
+inline unsigned int BitFont_GetTextDimensionSz = yra::BitFont_GetTextDimensionSz;
+inline unsigned int BitFont_DimensionDone = yra::BitFont_DimensionDone;
+inline unsigned int BitFont_DimensionDoneSz = yra::BitFont_DimensionDoneSz;
+inline unsigned int Drawing_PrintUnicode = yra::Drawing_PrintUnicode;
+inline unsigned int Drawing_PrintUnicodeSz = yra::Drawing_PrintUnicodeSz;
+inline unsigned int BitText_Print = yra::BitText_Print;
+inline unsigned int BitText_PrintSz = yra::BitText_PrintSz;
+inline unsigned int BitText_DrawText = yra::BitText_DrawText;
+inline unsigned int BitText_DrawTextSz = yra::BitText_DrawTextSz;
+inline unsigned int Subtitle_DrawDone = yra::Subtitle_DrawDone;
+inline unsigned int Subtitle_DrawDoneSz = yra::Subtitle_DrawDoneSz;
+inline unsigned int BitFont_Blit = yra::BitFont_Blit;
+inline unsigned int BitFont_BlitSz = yra::BitFont_BlitSz;
+inline unsigned int BitFont_DrawString = yra::BitFont_DrawString;
+inline unsigned int BitFont_DrawStringSz = yra::BitFont_DrawStringSz;
+inline unsigned int BitText_LineBreak = yra::BitText_LineBreak;
+inline unsigned int BitText_LineWrap = yra::BitText_LineWrap;
+inline unsigned int BitText_LineLast = yra::BitText_LineLast;
+inline unsigned int BitText_LineSz = yra::BitText_LineSz;
+inline unsigned int BitFont_Unlock = yra::BitFont_Unlock;
+inline unsigned int BitFont_UnlockSz = yra::BitFont_UnlockSz;
+inline unsigned int Drawing_LineBox = yra::Drawing_LineBox;
+inline unsigned int Drawing_LineBoxSz = yra::Drawing_LineBoxSz;
+inline const char *ExeName = yra::ExeName;
+inline const char *DllName = "VectorText.dll";
+inline const char *Version = yra::Version;
+inline unsigned int Width_Helper = yra::Width_Helper;
+inline unsigned int Width_Return = yra::Width_Return;
+inline unsigned int Drawing_WidthReturn = yra::Drawing_WidthReturn;
+inline unsigned int Loading_WidthReturn1 = yra::Loading_WidthReturn1;
+inline unsigned int Loading_WidthReturn2 = yra::Loading_WidthReturn2;
+inline unsigned int Startup_WidthReturn1 = yra::Startup_WidthReturn1;
+inline unsigned int Startup_WidthReturn2 = yra::Startup_WidthReturn2;
+inline unsigned int Message_WidthReturn = yra::Message_WidthReturn;
+inline unsigned int Tooltip_WidthReturn = yra::Tooltip_WidthReturn;
+inline unsigned int Tooltip_DrawReturn = yra::Tooltip_DrawReturn;
+inline unsigned int Sidebar_WidthReturn = yra::Sidebar_WidthReturn;
+inline unsigned int String_BlitReturn = yra::String_BlitReturn;
+inline unsigned int Break_BlitReturn = yra::Break_BlitReturn;
+inline unsigned int Wrap_BlitReturn = yra::Wrap_BlitReturn;
+inline unsigned int Last_BlitReturn = yra::Last_BlitReturn;
+inline unsigned int Print_StringReturn = yra::Print_StringReturn;
+inline unsigned int Ordinary_WidthReturn = yra::Ordinary_WidthReturn;
+inline unsigned int DSurface_Fill = yra::DSurface_Fill;
+inline unsigned int DSurface_FillSlot = yra::DSurface_FillSlot;
+inline unsigned int DSurface_Type = yra::DSurface_Type;
+inline unsigned int DSurface_TypeSlot = yra::DSurface_TypeSlot;
+inline unsigned int XSurface_Copy = yra::XSurface_Copy;
+inline unsigned int BSurface_Vtable = yra::BSurface_Vtable;
+inline unsigned int BSurface_Delete = yra::BSurface_Delete;
+inline unsigned int Copier_Opaque = yra::Copier_Opaque;
+inline unsigned int Copier_Keyed = yra::Copier_Keyed;
+inline void Select(bool ra2)
+{
+    kExeSize = ra2 ? ra2a::kExeSize : yra::kExeSize;
+    kExeTimestamp = ra2 ? ra2a::kExeTimestamp : yra::kExeTimestamp;
+    kExeCRC = ra2 ? ra2a::kExeCRC : yra::kExeCRC;
+    BitFont_Instance = ra2 ? ra2a::BitFont_Instance : yra::BitFont_Instance;
+    BitText_Instance = ra2 ? ra2a::BitText_Instance : yra::BitText_Instance;
+    Drawing_GetTextDimensions = ra2 ? ra2a::Drawing_GetTextDimensions : yra::Drawing_GetTextDimensions;
+    Drawing_GetTextDimensionsSz = ra2 ? ra2a::Drawing_GetTextDimensionsSz : yra::Drawing_GetTextDimensionsSz;
+    Drawing_TextDimensionsDone = ra2 ? ra2a::Drawing_TextDimensionsDone : yra::Drawing_TextDimensionsDone;
+    Drawing_TextDimensionsDoneSz = ra2 ? ra2a::Drawing_TextDimensionsDoneSz : yra::Drawing_TextDimensionsDoneSz;
+    Message_Background = ra2 ? ra2a::Message_Background : yra::Message_Background;
+    Message_BackgroundSz = ra2 ? ra2a::Message_BackgroundSz : yra::Message_BackgroundSz;
+    BitFont_GetTextDimension = ra2 ? ra2a::BitFont_GetTextDimension : yra::BitFont_GetTextDimension;
+    BitFont_GetTextDimensionSz = ra2 ? ra2a::BitFont_GetTextDimensionSz : yra::BitFont_GetTextDimensionSz;
+    BitFont_DimensionDone = ra2 ? ra2a::BitFont_DimensionDone : yra::BitFont_DimensionDone;
+    BitFont_DimensionDoneSz = ra2 ? ra2a::BitFont_DimensionDoneSz : yra::BitFont_DimensionDoneSz;
+    Drawing_PrintUnicode = ra2 ? ra2a::Drawing_PrintUnicode : yra::Drawing_PrintUnicode;
+    Drawing_PrintUnicodeSz = ra2 ? ra2a::Drawing_PrintUnicodeSz : yra::Drawing_PrintUnicodeSz;
+    BitText_Print = ra2 ? ra2a::BitText_Print : yra::BitText_Print;
+    BitText_PrintSz = ra2 ? ra2a::BitText_PrintSz : yra::BitText_PrintSz;
+    BitText_DrawText = ra2 ? ra2a::BitText_DrawText : yra::BitText_DrawText;
+    BitText_DrawTextSz = ra2 ? ra2a::BitText_DrawTextSz : yra::BitText_DrawTextSz;
+    Subtitle_DrawDone = ra2 ? ra2a::Subtitle_DrawDone : yra::Subtitle_DrawDone;
+    Subtitle_DrawDoneSz = ra2 ? ra2a::Subtitle_DrawDoneSz : yra::Subtitle_DrawDoneSz;
+    BitFont_Blit = ra2 ? ra2a::BitFont_Blit : yra::BitFont_Blit;
+    BitFont_BlitSz = ra2 ? ra2a::BitFont_BlitSz : yra::BitFont_BlitSz;
+    BitFont_DrawString = ra2 ? ra2a::BitFont_DrawString : yra::BitFont_DrawString;
+    BitFont_DrawStringSz = ra2 ? ra2a::BitFont_DrawStringSz : yra::BitFont_DrawStringSz;
+    BitText_LineBreak = ra2 ? ra2a::BitText_LineBreak : yra::BitText_LineBreak;
+    BitText_LineWrap = ra2 ? ra2a::BitText_LineWrap : yra::BitText_LineWrap;
+    BitText_LineLast = ra2 ? ra2a::BitText_LineLast : yra::BitText_LineLast;
+    BitText_LineSz = ra2 ? ra2a::BitText_LineSz : yra::BitText_LineSz;
+    BitFont_Unlock = ra2 ? ra2a::BitFont_Unlock : yra::BitFont_Unlock;
+    BitFont_UnlockSz = ra2 ? ra2a::BitFont_UnlockSz : yra::BitFont_UnlockSz;
+    Drawing_LineBox = ra2 ? ra2a::Drawing_LineBox : yra::Drawing_LineBox;
+    Drawing_LineBoxSz = ra2 ? ra2a::Drawing_LineBoxSz : yra::Drawing_LineBoxSz;
+    ExeName = ra2 ? ra2a::ExeName : yra::ExeName;
+    Version = ra2 ? ra2a::Version : yra::Version;
+    Width_Helper = ra2 ? ra2a::Width_Helper : yra::Width_Helper;
+    Width_Return = ra2 ? ra2a::Width_Return : yra::Width_Return;
+    Drawing_WidthReturn = ra2 ? ra2a::Drawing_WidthReturn : yra::Drawing_WidthReturn;
+    Loading_WidthReturn1 = ra2 ? ra2a::Loading_WidthReturn1 : yra::Loading_WidthReturn1;
+    Loading_WidthReturn2 = ra2 ? ra2a::Loading_WidthReturn2 : yra::Loading_WidthReturn2;
+    Startup_WidthReturn1 = ra2 ? ra2a::Startup_WidthReturn1 : yra::Startup_WidthReturn1;
+    Startup_WidthReturn2 = ra2 ? ra2a::Startup_WidthReturn2 : yra::Startup_WidthReturn2;
+    Message_WidthReturn = ra2 ? ra2a::Message_WidthReturn : yra::Message_WidthReturn;
+    Tooltip_WidthReturn = ra2 ? ra2a::Tooltip_WidthReturn : yra::Tooltip_WidthReturn;
+    Tooltip_DrawReturn = ra2 ? ra2a::Tooltip_DrawReturn : yra::Tooltip_DrawReturn;
+    Sidebar_WidthReturn = ra2 ? ra2a::Sidebar_WidthReturn : yra::Sidebar_WidthReturn;
+    String_BlitReturn = ra2 ? ra2a::String_BlitReturn : yra::String_BlitReturn;
+    Break_BlitReturn = ra2 ? ra2a::Break_BlitReturn : yra::Break_BlitReturn;
+    Wrap_BlitReturn = ra2 ? ra2a::Wrap_BlitReturn : yra::Wrap_BlitReturn;
+    Last_BlitReturn = ra2 ? ra2a::Last_BlitReturn : yra::Last_BlitReturn;
+    Print_StringReturn = ra2 ? ra2a::Print_StringReturn : yra::Print_StringReturn;
+    Ordinary_WidthReturn = ra2 ? ra2a::Ordinary_WidthReturn : yra::Ordinary_WidthReturn;
+    DSurface_Fill = ra2 ? ra2a::DSurface_Fill : yra::DSurface_Fill;
+    DSurface_FillSlot = ra2 ? ra2a::DSurface_FillSlot : yra::DSurface_FillSlot;
+    DSurface_Type = ra2 ? ra2a::DSurface_Type : yra::DSurface_Type;
+    DSurface_TypeSlot = ra2 ? ra2a::DSurface_TypeSlot : yra::DSurface_TypeSlot;
+    XSurface_Copy = ra2 ? ra2a::XSurface_Copy : yra::XSurface_Copy;
+    BSurface_Vtable = ra2 ? ra2a::BSurface_Vtable : yra::BSurface_Vtable;
+    BSurface_Delete = ra2 ? ra2a::BSurface_Delete : yra::BSurface_Delete;
+    Copier_Opaque = ra2 ? ra2a::Copier_Opaque : yra::Copier_Opaque;
+    Copier_Keyed = ra2 ? ra2a::Copier_Keyed : yra::Copier_Keyed;
+}
+} // namespace game

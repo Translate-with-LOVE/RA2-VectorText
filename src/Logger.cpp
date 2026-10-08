@@ -3,7 +3,7 @@
 #include "Logger.h"
 #include "ConfigState.h"
 #include "Takeover.h"
-#include "../include/YRAddresses.h"
+#include "GameAddresses.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -41,9 +41,9 @@ size_t g_uniqueTotal = 0;
 // per (hook, call site): how many unreadable / implausible calls we logged
 std::map<int, std::map<unsigned int, int>> g_missCount;
 
-const char *const kHookNames[Hook_Count] = {"Drawing::GetTextDimensions(0x4A59E0)", "Drawing::PrintUnicode(0x4A61C0)",
-                                            "BitFont::GetTextDimension(0x433CF0)",  "BitText::Print(0x434B90)",
-                                            "BitText::DrawText(0x434CD0)",          "BitFont::Blit(0x434120)"};
+const char *const kHookNames[Hook_Count] = {"Drawing::GetTextDimensions", "Drawing::PrintUnicode",
+                                            "BitFont::GetTextDimension",  "BitText::Print",
+                                            "BitText::DrawText",          "BitFont::Blit"};
 
 // ---------------------------------------------------------------- utils
 std::string Format(const char *fmt, ...)
@@ -187,9 +187,10 @@ void WriteIdentity()
 
     WriteLine(Format("PROC  pid=%lu  moduleBase=0x%08X  %s", (unsigned long)GetCurrentProcessId(), moduleBase, path));
     WriteLine(Format("EXE   size=0x%08X timestamp=0x%08X crc32=0x%08X   (expected 0x%08X/0x%08X/0x%08X)", fileSize,
-                     timestamp, crc, yra::kExeSize, yra::kExeTimestamp, yra::kExeCRC));
-    if (fileSize != yra::kExeSize || crc != yra::kExeCRC)
-        WriteLine("WARN  unexpected executable -- addresses in YRAddresses.h may not match this build!");
+                     timestamp, crc, game::kExeSize, game::kExeTimestamp, game::kExeCRC));
+    const bool steamYR = timestamp == yra::kExeTimestamp && fileSize == 0x0050A940 && crc == 0xA3F19485;
+    if (!steamYR && (fileSize != game::kExeSize || crc != game::kExeCRC))
+        WriteLine("WARN  unexpected executable -- executable differs from the reference profile; verify hook instructions before use.");
 }
 
 // -------------------------------------------------------------- summary
@@ -311,8 +312,9 @@ void Init()
                                                : " VectorText M1 -- observation only, no drawing behaviour is changed");
         WriteLine(Format(" log=%s%s  enabled=%d detailed=%d blitDetails=%d maxUnique=%d flush=%ums", g_dir, g_logName,
                          (int)g_enabled, (int)g_detailed, (int)g_blitDetail, g_maxUnique, (unsigned)g_flushMs));
-        WriteLine(" hooks: 0x4A59E0 GetTextDimensions | 0x4A61C0 PrintUnicode | 0x433CF0 GetTextDimension");
-        WriteLine("        0x434B90 BitText::Print   | 0x434CD0 DrawText     | 0x434120 Blit (counters)");
+        WriteLine(Format(" profile: %s; %s", game::Version, game::DllName));
+        WriteLine(Format(" hooks: 0x%08X GetTextDimensions | 0x%08X PrintUnicode | 0x%08X GetTextDimension", game::Drawing_GetTextDimensions, game::Drawing_PrintUnicode, game::BitFont_GetTextDimension));
+        WriteLine(Format("        0x%08X BitText::Print | 0x%08X DrawText | 0x%08X Blit", game::BitText_Print, game::BitText_DrawText, game::BitFont_Blit));
         WriteIdentity();
         WriteLine("===================================================================");
     }

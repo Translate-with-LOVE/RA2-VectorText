@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "LineLayout.h"
 
 // Natural row spacing, width fitting and TLS reveal plan; native pen returns stay unchanged.
@@ -168,8 +169,8 @@ bool BeginStringLine(void *bitFont, const wchar_t *text, int count, int x, int y
     const LineBox box = t_box;
     t_box.valid = false;
     if (box.valid && box.font == bitFont && box.text == text && box.gameX == x && box.y == y)
-        return BeginLine(bitFont, text, count, x, y, box.boxX, box.width, box.align, 0x0043464Du);
-    return BeginLine(bitFont, text, count, x, y, x, 0, 0, 0x0043464Du);
+        return BeginLine(bitFont, text, count, x, y, box.boxX, box.width, box.align, game::String_BlitReturn);
+    return BeginLine(bitFont, text, count, x, y, x, 0, 0, game::String_BlitReturn);
 }
 
 bool GetLineInfo(LineInfo *info)

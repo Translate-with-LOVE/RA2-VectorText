@@ -20,6 +20,7 @@
 // ===========================================================================
 
 #include <windows.h>
+#include "offline_test_host.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

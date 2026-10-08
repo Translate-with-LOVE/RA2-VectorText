@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "GameAddresses.h"
 #include "presentation/State.h"
 
 // cnc-ddraw detection and hook installation. Backends live in presentation/.
@@ -56,20 +57,20 @@ void Start(HMODULE module)
     char filename[MAX_PATH]{};
     GetModuleFileNameA(executable, filename, MAX_PATH);
     const char *basename = strrchr(filename, '\\');
-    if (!_stricmp(basename ? basename + 1 : filename, "gamemd.exe"))
+    if (!_stricmp(basename ? basename + 1 : filename, game::ExeName))
     {
         const unsigned char prefix[] = {0x81, 0xEC, 0xB4, 0, 0, 0, 0x53, 0x56, 0x8B, 0xF1, 0x57};
         const unsigned char copyPrefix[] = {0x8B, 0x44, 0x24, 0x1C, 0x83, 0xEC, 0x20, 0x53, 0x56, 0x8B, 0xF1};
         auto exeDos = (IMAGE_DOS_HEADER *)executable;
         auto exeNt = (IMAGE_NT_HEADERS *)((char *)executable + exeDos->e_lfanew);
-        const bool valid = (uintptr_t)executable == 0x400000 && exeNt->FileHeader.TimeDateStamp == 0x3BDF544E &&
-                           *(uintptr_t *)0x7E85E4 == 0x4BB620 && *(uintptr_t *)0x7E8658 == 0x4C1AB0 &&
-                           !memcmp((void *)0x4BB620, prefix, sizeof(prefix)) &&
-                           !memcmp((void *)0x437350, copyPrefix, sizeof(copyPrefix));
-        if (!valid || MH_CreateHook((void *)0x4BB620, (void *)HookGameFill, (void **)&realGameFill) != MH_OK ||
-            MH_QueueEnableHook((void *)0x4BB620) != MH_OK ||
-            MH_CreateHook((void *)0x437350, (void *)HookGameCopy, (void **)&realGameCopy) != MH_OK ||
-            MH_QueueEnableHook((void *)0x437350) != MH_OK)
+        const bool valid = (uintptr_t)executable == 0x400000 && exeNt->FileHeader.TimeDateStamp == game::kExeTimestamp &&
+                           *(uintptr_t *)game::DSurface_FillSlot == game::DSurface_Fill && *(uintptr_t *)game::DSurface_TypeSlot == game::DSurface_Type &&
+                           !memcmp((void *)game::DSurface_Fill, prefix, sizeof(prefix)) &&
+                           !memcmp((void *)game::XSurface_Copy, copyPrefix, sizeof(copyPrefix));
+        if (!valid || MH_CreateHook((void *)game::DSurface_Fill, (void *)HookGameFill, (void **)&realGameFill) != MH_OK ||
+            MH_QueueEnableHook((void *)game::DSurface_Fill) != MH_OK ||
+            MH_CreateHook((void *)game::XSurface_Copy, (void *)HookGameCopy, (void **)&realGameCopy) != MH_OK ||
+            MH_QueueEnableHook((void *)game::XSurface_Copy) != MH_OK)
         {
             MH_Uninitialize();
             Log::Note("Present32: native fill/copy entry differs; retaining RGB565");
@@ -79,9 +80,9 @@ void Start(HMODULE module)
         // stores it at loading-object+60 and deletes it through vtable[0]
         // at 5543EC..5543F7. Scope this optional hook to that verified type.
         const unsigned char deletePrefix[] = {0x56, 0x8B, 0xF1, 0x8D, 0x4E, 0x14};
-        if (*(uintptr_t *)0x7E2070 == 0x411650 && !memcmp((void *)0x411650, deletePrefix, sizeof(deletePrefix)) &&
-            MH_CreateHook((void *)0x411650, (void *)HookCpuDelete, (void **)&realCpuDelete) == MH_OK &&
-            MH_QueueEnableHook((void *)0x411650) == MH_OK)
+        if (*(uintptr_t *)game::BSurface_Vtable == game::BSurface_Delete && !memcmp((void *)game::BSurface_Delete, deletePrefix, sizeof(deletePrefix)) &&
+            MH_CreateHook((void *)game::BSurface_Delete, (void *)HookCpuDelete, (void **)&realCpuDelete) == MH_OK &&
+            MH_QueueEnableHook((void *)game::BSurface_Delete) == MH_OK)
             state->cpuTextReady = true;
         else
             Log::Note("Present32: BSurface lifetime hook unavailable; CPU text retains RGB565");
@@ -113,6 +114,7 @@ HRESULT WINAPI HookCreateDD(GUID *guid, void **out, IUnknown *outer)
     {
         Patch(*out, 0, (void *)HookDDQuery);
         Patch(*out, 6, (void *)HookCreateSurface);
+        Patch(*out, 20, (void *)HookCooperativeLevel);
     }
     return hr;
 }
@@ -150,7 +152,7 @@ void PrepareEarly()
     char executable[MAX_PATH]{};
     GetModuleFileNameA(nullptr, executable, MAX_PATH);
     const char *filename = strrchr(executable, '\\');
-    if (_stricmp(filename ? filename + 1 : executable, "gamemd.exe"))
+    if (_stricmp(filename ? filename + 1 : executable, game::ExeName))
         return;
 #endif
     auto base = (unsigned char *)GetModuleHandleW(nullptr);
@@ -191,7 +193,7 @@ void TrackTextSurface(void *surface)
         return;
     // Only the verified native BSurface class owns this memory layout.
     // All DSurface and extension surface paths keep their existing hooks.
-    if (*(uintptr_t *)surface != 0x7E2070)
+    if (*(uintptr_t *)surface != game::BSurface_Vtable)
         return;
     TrackCpuText(surface);
 }
