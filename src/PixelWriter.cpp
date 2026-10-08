@@ -6,8 +6,87 @@
 namespace vt
 {
     static PresentationWriter g_presentationWriter = nullptr;
+    static volatile LONG outputRasterScale = 2;
+    void SetOutputRasterScale(int scale) { InterlockedExchange(&outputRasterScale, scale < 2 ? 2 : (scale > 8 ? 8 : scale)); }
+    int OutputRasterScale() { return (int)InterlockedCompareExchange(&outputRasterScale, 0, 0); }
     void SetPresentationWriter(PresentationWriter writer) { g_presentationWriter = writer; }
     const ColorFormat RGB565 = { 11, 5, 5, 6, 0, 5 };
+
+    namespace
+    {
+    thread_local bool captureTextInk = false, capturedTextInk = false;
+    thread_local bool subtitleOutline = false;
+    thread_local TextInkRect textInk{};
+
+    void CaptureCell(const Target &t, const GlyphCell &cell, int x, int y, int rows, bool aa)
+    {
+        if (!captureTextInk || !t.base || t.pitch <= 0)
+            return;
+        if (cell.inkRows > 0)
+            rows = cell.inkRows;
+        if (rows <= 0 || rows > 32)
+            return;
+        auto include = [&](int l, int top, int r, int bottom)
+        {
+            if (subtitleOutline) { --l; --top; ++r; ++bottom; }
+            l = (l < t.clipL ? t.clipL : l);
+            top = (top < t.clipT ? t.clipT : top);
+            r = (r > t.clipR + 1 ? t.clipR + 1 : r);
+            bottom = (bottom > t.clipB + 1 ? t.clipB + 1 : bottom);
+            if (l >= r || top >= bottom)
+                return;
+            if (!capturedTextInk)
+            {
+                textInk = {l, top, r, bottom};
+                capturedTextInk = true;
+            }
+            else
+            {
+                if (l < textInk.left)
+                    textInk.left = l;
+                if (top < textInk.top)
+                    textInk.top = top;
+                if (r > textInk.right)
+                    textInk.right = r;
+                if (bottom > textInk.bottom)
+                    textInk.bottom = bottom;
+            }
+        };
+        for (int row = 0; row < rows; ++row)
+            for (int col = 0; col < 24; ++col)
+                if (aa ? cell.cov[row * 24 + col] != 0 : (cell.bits[row * 3 + col / 8] & (0x80 >> (col & 7))) != 0)
+                    include(x + cell.inkX + col, y + cell.inkY + row, x + cell.inkX + col + 1, y + cell.inkY + row + 1);
+        if (aa && cell.raster2)
+        {
+            const auto &high = *cell.raster2;
+            for (int row = 0; row < high.rows; ++row)
+                for (int col = 0; col < high.width; ++col)
+                    if (high.coverage[(size_t)row * high.width + col])
+                    {
+                        const int px = x + (int)floor((high.left + col) / (double)high.scale);
+                        const int py = y + (int)floor((high.top + row) / (double)high.scale);
+                        include(px, py, px + 1, py + 1);
+                    }
+        }
+    }
+    } // namespace
+
+    void BeginTextInkCapture(bool outline)
+    {
+        captureTextInk = true;
+        capturedTextInk = false;
+        subtitleOutline = outline;
+    }
+    bool SubtitleOutlineActive() { return captureTextInk && subtitleOutline; }
+    bool EndTextInkCapture(TextInkRect *ink)
+    {
+        const bool valid = captureTextInk && capturedTextInk && ink;
+        captureTextInk = capturedTextInk = false;
+        subtitleOutline = false;
+        if (valid)
+            *ink = textInk;
+        return valid;
+    }
 
     // Coverage gamma: linear coverage makes antialiased small text look thin and
     // hazy, because the perceived weight of partial pixels is sub-linear.  A
@@ -34,9 +113,12 @@ namespace vt
         g_covLutReady = true;
     }
 
+    static int DrawSubtitleEdge(const Target&, const GlyphCell&, int, int, int, unsigned short, bool, const ColorFormat&);
+
     int DrawCell(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                  unsigned short color)
     {
+        CaptureCell(t, cell, x, y, cellLines, false);
         if (g_presentationWriter)
         {
             const int result = g_presentationWriter(t, cell, x, y, cellLines, color, false);
@@ -48,7 +130,7 @@ namespace vt
         if (!t.base || t.pitch <= 0 || cellLines <= 0 || cellLines > 32)
             return 0;
 
-        int written = 0;
+        int written = DrawSubtitleEdge(t, cell, x, y, cellLines, color, false, RGB565);
         for (int r = 0; r < cellLines; ++r)
         {
             const int sy = y + r;
@@ -190,9 +272,46 @@ namespace vt
         return (unsigned short)((r << fmt.redShift) | (g << fmt.greenShift) | (b << fmt.blueShift));
     }
 
+    static int DrawSubtitleEdge(const Target& t, const GlyphCell& cell, int x, int y, int rows,
+                                unsigned short color, bool aa, const ColorFormat& fmt)
+    {
+        if (!SubtitleOutlineActive()) return 0;
+        BuildLuts();
+        const int rm=(1<<fmt.redBits)-1, gm=(1<<fmt.greenBits)-1, bm=(1<<fmt.blueBits)-1;
+        const unsigned short white=(unsigned short)((rm<<fmt.redShift)|(gm<<fmt.greenShift)|(bm<<fmt.blueShift));
+        const uint32_t textLuminance=2126u*g_srgbToLin[((color>>fmt.redShift)&rm)*255/rm] +
+            7152u*g_srgbToLin[((color>>fmt.greenShift)&gm)*255/gm] +
+            722u*g_srgbToLin[((color>>fmt.blueShift)&bm)*255/bm];
+        const bool allowWhiteEdge=textLuminance<733u*10000u;
+        auto coverage=[&](int r,int c) {
+            if(r<0 || r>=rows || c<0 || c>=24) return 0;
+            if(!aa) return (cell.bits[r*3+c/8] & (0x80>>(c&7))) ? 255 : 0;
+            const int cov=cell.cov[r*24+c];
+            return g_covLutReady ? (int)g_covLut[cov] : cov;
+        };
+        int written=0;
+        for(int r=-1;r<=rows;++r) for(int c=-1;c<=24;++c) {
+            const int sx=x+c,sy=y+r;
+            if(sx<t.clipL || sx>t.clipR || sy<t.clipT || sy>t.clipB) continue;
+            const int cov=coverage(r,c);
+            int dilated=cov;
+            for(int oy=-1;oy<=1;++oy) for(int ox=-1;ox<=1;++ox)
+                if(coverage(r+oy,c+ox)>dilated) dilated=coverage(r+oy,c+ox);
+            if(dilated==cov) continue;
+            auto& pixel=t.base[(size_t)sy*t.pitch+sx];
+            pixel=Blend(pixel,allowWhiteEdge ? white : 0,dilated-cov,fmt,sx,sy);
+            // Subtitle caches are copied with zero as the transparent key.
+            // Keep a black border observable through that copy and its erase.
+            if(!pixel) pixel=1;
+            ++written;
+        }
+        return written;
+    }
+
     int DrawCellAA(const Target& t, const GlyphCell& cell, int x, int y, int cellLines,
                    unsigned short color, const ColorFormat& fmt)
     {
+        CaptureCell(t, cell, x, y, cellLines, true);
         if (g_presentationWriter)
         {
             const int result = g_presentationWriter(t, cell, x, y, cellLines, color, true);
@@ -204,7 +323,7 @@ namespace vt
         if (!t.base || t.pitch <= 0 || cellLines <= 0 || cellLines > 32)
             return 0;
 
-        int written = 0;
+        int written = DrawSubtitleEdge(t, cell, x, y, cellLines, color, true, fmt);
         for (int r = 0; r < cellLines; ++r)
         {
             const int sy = y + r;

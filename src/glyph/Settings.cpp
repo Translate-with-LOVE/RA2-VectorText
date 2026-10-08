@@ -4,11 +4,35 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
 
 #include <cmath>
 
 namespace vt
 {
+int GlyphSource::LatinCenterShiftQuarter(int scale1024)
+{
+    EnterCriticalSection(&m_cs);
+    if(!m_centerReady) {
+        auto centre=[&](unsigned int cp,double& value) {
+            auto face=(FT_Face)FaceHandleFor(cp);
+            if(!face || !FT_Get_Char_Index(face,cp)) return false;
+            FT_Set_Transform(face,nullptr,nullptr);
+            if(FT_Load_Char(face,cp,FT_LOAD_NO_HINTING|FT_LOAD_NO_BITMAP) ||
+                face->glyph->format!=FT_GLYPH_FORMAT_OUTLINE) return false;
+            FT_BBox box{};FT_Outline_Get_CBox(&face->glyph->outline,&box);
+            value=(box.yMin+box.yMax)/(128.0*m_ss);
+            return true;
+        };
+        double latin=0,cjk=0;
+        m_centerShift=centre('H',latin) && centre(0x56FD,cjk) ? latin-cjk : 0;
+        m_centerReady=true;
+    }
+    const int result=(int)std::floor(m_centerShift*4*scale1024/1024.0+0.5);
+    LeaveCriticalSection(&m_cs);
+    return result;
+}
+
 void GlyphSource::SetHighResolution(bool on)
 {
     EnterCriticalSection(&m_cs);
@@ -17,6 +41,14 @@ void GlyphSource::SetHighResolution(bool on)
         ClearCache();
         m_highResolution = on;
     }
+    LeaveCriticalSection(&m_cs);
+}
+
+void GlyphSource::SetHighResolutionScale(int scale)
+{
+    scale = scale < 2 ? 2 : (scale > 8 ? 8 : scale);
+    EnterCriticalSection(&m_cs);
+    if (m_highScale != scale) { ClearCache(); m_highScale = scale; }
     LeaveCriticalSection(&m_cs);
 }
 

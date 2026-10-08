@@ -7,20 +7,26 @@
 #include "GlyphSource.h"
 #include <array>
 #include <map>
+#include <memory>
 #include <stdint.h>
 #include <vector>
 
 namespace vt
 {
     struct PixelRect { int left, top, right, bottom; }; // exclusive right/bottom
-    struct InkPixel { uint16_t r=0,g=0,b=0,a=0; };
+    struct InkPixel { uint16_t r=0,g=0,b=0,a=0,edge=0,lightEdge=0; };
+    struct InkGrid { int scale = 2; std::vector<InkPixel> pixels; };
     struct PlanePixel
     {
         uint16_t r, g, b, a; // premultiplied 16-bit linear (or configured sRGB) channels
         uint16_t background = 0, marker = 0;
         bool tracked = false; // native compatibility pixel, excluded from final blend
         bool high = false;
+        bool subtitle = false; // body markers need refresh too when copied onto matching scene colors
         std::array<InkPixel,4> samples{}; // four independent output pixels, not enlarged 1x ink
+        uint16_t edge = 0; // total border contribution, also tracked for native copies/erasure
+        uint16_t lightEdge = 0; // stable white inner rim for dark text; outer rim stays black
+        std::shared_ptr<const InkGrid> grid; // allocated only above 2x; copies share immutable samples
     };
     struct PlaneOptions
     {
@@ -41,10 +47,14 @@ namespace vt
         PixelPlane(const PixelPlane& other);
         PixelPlane& operator=(const PixelPlane& other);
         void Paint(const GlyphCell& cell, int x, int y, int rows,
-                   unsigned short color, PixelRect clip,unsigned short* native = nullptr,int pitch = 0);
+                   unsigned short color, PixelRect clip,unsigned short* native = nullptr,int pitch = 0,
+                   bool subtitleOutline = false);
         // Detect opaque CPU/SHP writes even when they restore the same original
         // background. The native pixel differs while retained text is present.
         void ValidateNative(const unsigned short* native,int pitch);
+        // After a successful copy, update adaptive compatibility pixels to the
+        // destination background and keep their erasure markers observable.
+        void ResolveSubtitleNative(unsigned short* native,int pitch,PixelRect rect);
         void Clear(PixelRect rect);
         void ClearPixel(int x, int y);
         PlanePixel At(int x, int y) const;
@@ -53,6 +63,7 @@ namespace vt
         size_t TileCount() const { return m_tiles.size(); }
         int Width() const { return m_width; }
         int Height() const { return m_height; }
+        int RasterScale() const { return m_rasterScale; }
 
         // Native base pixels are read only for colour keys and occlusion.
         // A transparent keyed background still transfers its text mask.
@@ -74,6 +85,7 @@ namespace vt
         // Include neighboring cells touched by the bilinear filter footprint.
         std::vector<PixelRect> TextTiles(bool filtered = false) const;
         void Overlay2Rect(uint32_t* output,int outputPitch,PixelRect rect) const;
+        void OverlayRect(uint32_t* output,int outputPitch,PixelRect rect,int scale) const;
         struct NativeSample { int x, y; unsigned short base; unsigned int generation; };
         std::vector<NativeSample> CaptureNative(const unsigned short* base, int pitch,
                                                PixelRect rect) const;
@@ -95,6 +107,8 @@ namespace vt
         std::array<InkPixel,256> m_colors{};
         unsigned short m_color = 0;
         bool m_colorReady = false;
+        bool m_adaptiveEdge = false;
+        int m_rasterScale = 2;
         using TileMap=std::map<int,Tile>;
         TileMap m_tiles;
         std::vector<TileMap::node_type> m_spareTiles;

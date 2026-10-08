@@ -32,6 +32,9 @@ namespace vt { namespace Presentation32 {
     void TestCpuTextTrack(void* surface);
     void TestCpuTextRelease(void* surface);
     bool TestCpuTextOverlay(void* surface,unsigned int* output,int pitch);
+    bool TestFrameUploadBegin(void* surface,void* texture,void** pixels,int* pitch);
+    bool TestFrameUploadEnd(void* texture);
+    bool TestSurfaceUnlock(void* surface);
     struct TestOverlay {
         int width=0,height=0;
         bool point=false;
@@ -40,6 +43,7 @@ namespace vt { namespace Presentation32 {
     };
     bool TestBuildOverlay(const PixelPlane& plane,float sx,float sy,float offsetX,float offsetY,
                           TestOverlay& output,const PixelRect* source=nullptr);
-    float TestObservedScale();
+    float TestObservedScale(bool vertical = false);
+    int TestObservedRaster();
 #endif
 } }

@@ -19,4 +19,6 @@ bool NaturalGlyph(LineGlyph &item, unsigned int previous, const LineGlyph *prior
 bool BitmapGlyph(LineGlyph &item, const unsigned char *slot, unsigned int bytes, int lines, int extra, int &penQ,
                  int scale1024);
 int TabEnd(int x, int origin, int tab);
+int MixedLatinShiftQ(const LineGlyph* items,int count,int scale1024);
+int LatinRasterY(unsigned int cp,int shiftQ,int* phase);
 } // namespace vt::Takeover::detail

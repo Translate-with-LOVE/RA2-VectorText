@@ -40,6 +40,17 @@ namespace vt
     using PresentationWriter = int (*)(const Target&, const GlyphCell&, int, int,
                                        int, unsigned short, bool);
     void SetPresentationWriter(PresentationWriter writer);
+    // Presenter publishes the observed output grid; the game thread updates
+    // its font cache at the next glyph lookup, never on the renderer thread.
+    void SetOutputRasterScale(int scale);
+    int OutputRasterScale();
+
+    // Scoped capture for the movie subtitle's next-frame erase rectangle.
+    // Bounds include clipped vector ink and independent HiDPI fringes.
+    struct TextInkRect { int left, top, right, bottom; };
+    void BeginTextInkCapture(bool subtitleOutline = false);
+    bool SubtitleOutlineActive();
+    bool EndTextInkCapture(TextInkRect* ink);
 
     // Draw one glyph cell at (x, y). Native fallback returns pixels written;
     // an accepting presentation adapter returns its nonnegative status.

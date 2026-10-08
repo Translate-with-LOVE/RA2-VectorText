@@ -48,26 +48,26 @@ struct ScreenVertex
 {
     float x, y, z, rhw, u, v;
 };
-// Two high-resolution samples per logical axis, with one logical-pixel
-// gutter copied from neighbors. Linear filtering must not read another
-// atlas cell, nor clamp at an internal text-tile boundary.
-constexpr int AtlasCellW = 68, AtlasCellH = 36, AtlasPad = 2;
+// A 32x16 logical tile plus a one-pixel gutter on each side. Physical atlas
+// cell size is 34x18 times the retained raster density (2..8).
 struct Texture
 {
     int width, height;
     D3DLOCKED_RECT native{};
     RECT rect{};
     std::vector<unsigned short> scratch;
+    std::unique_ptr<PixelPlane> framePlane; // immutable sidecar captured with this upload, never the live writer's plane
     bool locked = false;
     bool cleanWorld = false;
     IDirect3DTexture9 *overlay = nullptr;
     IDirect3DDevice9 *device = nullptr;
     int atlasWidth = 0, atlasHeight = 0, atlasColumns = 16;
+    int rasterScale = 2;
     std::vector<ScreenVertex> overlayVertices;
     std::vector<PixelRect> overlayTiles;
-    bool overlayReady = false;
+    bool overlayReady = false; // scaled output observed; uploads may (re)allocate the atlas
     bool overlayAttempted = false;
-    float reportedScale = 0;
+    float reportedScale = 0, reportedScaleY = 0;
 };
 struct State
 {
@@ -119,6 +119,9 @@ bool Describe(void *object, DDSURFACEDESC2 &d);
 std::shared_ptr<Buffer> Remember(void *object, const DDSURFACEDESC2 &d);
 std::shared_ptr<Buffer> Primary();
 void RecordFrame(const uint32_t *pixels, int width, int height, int pitch);
+HRESULT WINAPI HookTextureLock(void *object, UINT level, D3DLOCKED_RECT *out, const RECT *rect, DWORD flags);
+HRESULT WINAPI HookTextureUnlock(void *object, UINT level);
+HRESULT WINAPI HookUnlock(void *object, void *rectOrAddress);
 int Draw(const Target &t, const GlyphCell &cell, int x, int y, int rows, unsigned short color, bool aa);
 void Disable(const char *reason);
 bool GameDescription(void *object, DDSURFACEDESC2 &d, void *&native);

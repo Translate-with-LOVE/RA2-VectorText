@@ -6,14 +6,22 @@
 namespace vt::Presentation32
 {
 using namespace detail;
-float TestObservedScale()
+float TestObservedScale(bool vertical)
 {
     if (!state)
         return 0;
     Guard guard;
     for (const auto &entry : state->textures)
         if (entry.second.overlayReady && entry.second.cleanWorld)
-            return entry.second.reportedScale;
+            return vertical ? entry.second.reportedScaleY : entry.second.reportedScale;
+    return 0;
+}
+int TestObservedRaster()
+{
+    if(!state) return 0;
+    Guard guard;
+    for(const auto& entry:state->textures)
+        if(entry.second.overlayReady && entry.second.cleanWorld) return entry.second.rasterScale;
     return 0;
 }
 bool TestBuildOverlay(const PixelPlane &plane, float sx, float sy, float offsetX, float offsetY, TestOverlay &output,
@@ -23,6 +31,7 @@ bool TestBuildOverlay(const PixelPlane &plane, float sx, float sy, float offsetX
     Texture t{};
     t.width = plane.Width();
     t.height = plane.Height();
+    t.rasterScale=plane.RasterScale();
     const auto r = source ? *source : PixelRect{0, 0, t.width, t.height};
     const float l = offsetX - 0.5f, top = offsetY - 0.5f;
     const float right = l + (r.right - r.left) * sx, bottom = top + (r.bottom - r.top) * sy;
@@ -33,14 +42,14 @@ bool TestBuildOverlay(const PixelPlane &plane, float sx, float sy, float offsetX
     float actualX = 0, actualY = 0;
     if (!OutputScale(t, quad, actualX, actualY))
         return false;
-    output.point = fabs(actualX - 2.0f) < 0.0001f && fabs(actualY - 2.0f) < 0.0001f;
+    output.point = fabs(actualX - t.rasterScale) < 0.0001f && fabs(actualY - t.rasterScale) < 0.0001f;
     t.overlayTiles = plane.TextTiles(true);
-    if (!AtlasShape(t.overlayTiles.size(), 4096, 4096, t.atlasWidth, t.atlasHeight, t.atlasColumns))
+    if (!AtlasShape(t.overlayTiles.size(), 4096, 4096, t.atlasWidth, t.atlasHeight, t.atlasColumns,t.rasterScale))
         return false;
     output.width = t.atlasWidth;
     output.height = t.atlasHeight;
     output.pixels.resize((size_t)output.width * output.height);
-    PackOverlay(plane, t.overlayTiles, output.pixels.data(), output.width, t.atlasColumns);
+    PackOverlay(plane, t.overlayTiles, output.pixels.data(), output.width, t.atlasColumns,t.rasterScale);
     AtlasVertices(t, quad, actualX, actualY);
     for (const auto &v : t.overlayVertices)
         output.vertices.insert(output.vertices.end(), {v.x, v.y, v.u, v.v});
@@ -86,6 +95,28 @@ unsigned int TestPixel(int x, int y)
     return x >= 0 && y >= 0 && x < state->lastWidth && y < state->lastHeight
                ? state->last[(size_t)y * state->lastWidth + x]
                : 0;
+}
+bool TestFrameUploadBegin(void* surface,void* texture,void** pixels,int* pitch)
+{
+    DDSURFACEDESC2 d{};void* native=nullptr;
+    if(!GameDescription(surface,d,native) || !native) return false;
+    {
+        Guard guard;
+        Remember(native,d);state->primary=native;
+        if(state->textures.find(texture)==state->textures.end()) {
+            Texture t{};t.width=(int)d.dwWidth;t.height=(int)d.dwHeight;
+            state->textures.emplace(texture,std::move(t));
+        }
+    }
+    D3DLOCKED_RECT out{};RECT rect{0,0,(LONG)d.dwWidth,(LONG)d.dwHeight};
+    const HRESULT hr=HookTextureLock(texture,0,&out,&rect,0);
+    *pixels=out.pBits;*pitch=out.Pitch;return SUCCEEDED(hr);
+}
+bool TestFrameUploadEnd(void* texture) { return SUCCEEDED(HookTextureUnlock(texture,0)); }
+bool TestSurfaceUnlock(void* surface)
+{
+    DDSURFACEDESC2 d{};void* native=nullptr;
+    return GameDescription(surface,d,native) && native && SUCCEEDED(HookUnlock(native,nullptr));
 }
 void TestGameFill(void *gameSurface, const int *clip, const int *rect, DWORD color, TestFill original)
 {

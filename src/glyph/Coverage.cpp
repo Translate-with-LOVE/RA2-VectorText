@@ -73,27 +73,29 @@ void GlyphSource::BuildHighResolution(unsigned int codepoint, int gameAdvance, u
     FT_Matrix mat = context.mat;
     const FT_Vector &delta = context.delta;
     const FT_Int32 loadFlags = context.loadFlags;
-    // Retain a separate raster with hinting on a fixed 2x grid. D3D9
-    // scales these samples to the actual viewport, including fractions;
+    // Hint directly on a grid at least as dense as the observed output.
+    // D3D9 filters down to the actual viewport, including fractions;
     // logical advances/bearings above remain the same 1x layout.
     if (m_highResolution)
     {
+        const int scale = m_highScale;
         const bool cjk = UsesCJKFace(codepoint) && m_faceB;
         void **high = cjk ? &m_highB : &m_highA;
         if (!*high)
-            *high = OpenFace((cjk ? m_sizeCJK : m_sizeLatin) * 2, cjk ? NULL : (m_latinPath[0] ? m_latinPath : NULL));
+            *high = OpenFace((cjk ? m_sizeCJK : m_sizeLatin) * scale, cjk ? NULL : (m_latinPath[0] ? m_latinPath : NULL));
         FT_Face hf = (FT_Face)*high;
-        FT_Vector hd = {delta.x * 2 / m_ss, delta.y * 2 / m_ss};
+        FT_Vector hd = {delta.x * scale / m_ss, delta.y * scale / m_ss};
         if (hf)
             FT_Set_Transform(hf, &mat, &hd);
         if (hf && !FT_Load_Char(hf, (FT_ULong)codepoint, loadFlags | FT_LOAD_RENDER))
         {
             const auto &bitmap = hf->glyph->bitmap;
-            if (bitmap.width <= 128 && bitmap.rows <= 128)
+            if (bitmap.width <= 256 && bitmap.rows <= 256)
             {
                 GlyphRaster2 raster;
+                raster.scale = scale;
                 raster.left = hf->glyph->bitmap_left;
-                raster.top = m_baseline * 2 - hf->glyph->bitmap_top;
+                raster.top = m_baseline * scale - hf->glyph->bitmap_top;
                 raster.width = (int)bitmap.width;
                 raster.rows = (int)bitmap.rows;
                 raster.coverage.resize((size_t)raster.width * raster.rows);
@@ -103,7 +105,7 @@ void GlyphSource::BuildHighResolution(unsigned int codepoint, int gameAdvance, u
                         const auto *src = bitmap.buffer + r * bitmap.pitch;
                         int cov = bitmap.pixel_mode == FT_PIXEL_MODE_MONO ? ((src[c / 8] & (0x80 >> (c & 7))) ? 255 : 0)
                                                                           : src[c];
-                        if (m_fit && gameAdvance > 0 && (raster.left + c < 0 || raster.left + c >= gameAdvance * 2))
+                        if (m_fit && gameAdvance > 0 && (raster.left + c < 0 || raster.left + c >= gameAdvance * scale))
                             cov = 0;
                         raster.coverage[(size_t)r * raster.width + c] = (unsigned char)cov;
                     }

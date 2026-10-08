@@ -20,6 +20,7 @@ struct DynamicMeasurement
     vt::Takeover::InkY ink;
     int lineHeight;
     bool inkValid;
+    bool startup;
 };
 extern __declspec(thread) DynamicMeasurement t_measurement;
 struct TooltipLayout

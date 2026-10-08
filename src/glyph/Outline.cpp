@@ -76,7 +76,7 @@ void GlyphSource::FitOutline(unsigned int codepoint, int gameAdvance, int phase,
         // All direct-drawing glyphs share the same baseline. Ink above
         // or below the old 16-row cell must retain its actual bearing;
         // fitting each ink box vertically made Chinese letters bounce.
-        delta.y = 0;
+        // Keep the run's fractional vertical placement from Rasterize.
         FT_Set_Transform(face, &mat, &delta);
     }
 }

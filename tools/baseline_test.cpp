@@ -132,6 +132,76 @@ int main()
         ++highChecks;
     }
     printf("2x independent font/placement comparisons: %d\n",highChecks);
+    int outputChecks=0;
+    for(int density : {3,4,5,8}) for(const wchar_t* p=L"读取中版权©汉Ag，jg";*p;++p)
+    for(int hint : {0,2}) for(int phase : {0,3}) {
+        source.SetHighResolutionScale(density);source.SetHinting(hint);
+        const auto* cell=source.Get(*p,-1,phase);
+        if(!cell || !cell->raster2 || cell->raster2->scale!=density) { ++failures;continue; }
+        FT_Face face=(FT_Face)reference2.FaceHandleFor(*p);
+        const int pixels=(*p>=0x2E80 ? 16 : 13)*density;
+        if(FT_Set_Pixel_Sizes(face,0,pixels)) return 2;
+        FT_Matrix transform{65536,0,0,65536};FT_Vector offset{phase*16*density,0};
+        FT_Set_Transform(face,&transform,&offset);
+        if(FT_Load_Char(face,*p,(hint==2 ? FT_LOAD_NO_HINTING : FT_LOAD_TARGET_LIGHT)|FT_LOAD_NO_BITMAP|FT_LOAD_RENDER)) return 2;
+        const auto g=face->glyph;
+        vt::PlaneOptions options;options.highResolution=true;vt::PixelPlane plane(32,32,options);
+        plane.Paint(*cell,4,4,16,0xFFFF,{0,0,32,32});
+        std::vector<unsigned int> actual(32*32*density*density),expected(actual.size());
+        plane.OverlayRect(actual.data(),32*density,{0,0,32,32},density);
+        for(unsigned int r=0;r<g->bitmap.rows;++r) for(unsigned int c=0;c<g->bitmap.width;++c) {
+            const int x=4*density+g->bitmap_left+c,y=17*density-g->bitmap_top+r;
+            if(x>=0 && x<32*density && y>=0 && y<32*density)
+                expected[y*32*density+x]=g->bitmap.buffer[r*g->bitmap.pitch+c];
+        }
+        bool match=true;for(size_t i=0;i<actual.size();++i) if((actual[i]>>24)!=expected[i]) {match=false;break;}
+        if(!match) {printf("native grid mismatch U+%04X raster=%d hint=%d phase=%d\n",*p,density,hint,phase);++failures;}
+        ++outputChecks;
+    }
+    printf("3x/4x/5x/8x independent output-resolution comparisons: %d\n",outputChecks);
+    // Quarter-pixel Y positioning must rasterise from outlines at each output
+    // density. Compare independent FreeType coverage for letters, descenders,
+    // punctuation and raised symbols; none gets a special symbol adjustment.
+    int verticalChecks=0;
+    for(int latinSize:{13,16}) for(int ss:{1,2}) for(int density:{1,2,5})
+    for(unsigned int cp:{(unsigned int)'H',(unsigned int)'g',(unsigned int)'%',0x2122u})
+    for(int verticalPhase:{-2,-1,0,1,2}) {
+        source.SetSizes(latinSize,16);source.SetSupersample(ss);source.SetHinting(2);
+        source.SetHighResolution(density>1);source.SetHighResolutionScale(density);
+        const auto* cell=source.Get(cp,-1,0,1024,verticalPhase);
+        if(!cell) {++failures;continue;}
+        auto face=(FT_Face)reference2.FaceHandleFor(cp);
+        const int raster=density>1 ? density : ss;
+        if(FT_Set_Pixel_Sizes(face,0,latinSize*raster)) return 2;
+        FT_Vector offset{0,-verticalPhase*16*raster};
+        FT_Set_Transform(face,NULL,&offset);
+        if(FT_Load_Char(face,cp,FT_LOAD_NO_HINTING|FT_LOAD_NO_BITMAP|FT_LOAD_RENDER)) return 2;
+        const auto glyph=face->glyph;
+        const int width=32*density,height=32*density;
+        std::vector<unsigned int> expected(width*height),actual(expected.size());
+        for(unsigned int r=0;r<glyph->bitmap.rows;++r) for(unsigned int c=0;c<glyph->bitmap.width;++c) {
+            const int x=(int)floor((4*raster+glyph->bitmap_left+(int)c)*(double)density/raster);
+            const int y=(int)floor((17*raster-glyph->bitmap_top+(int)r)*(double)density/raster);
+            if(x>=0 && x<width && y>=0 && y<height) expected[y*width+x]+=glyph->bitmap.buffer[r*glyph->bitmap.pitch+c];
+        }
+        bool match=true;
+        if(density>1) {
+            vt::PlaneOptions options;options.highResolution=true;vt::PixelPlane plane(32,32,options);
+            plane.Paint(*cell,4,4,16,0xFFFF,{0,0,32,32});
+            plane.OverlayRect(actual.data(),width,{0,0,32,32},density);
+            for(size_t i=0;i<actual.size();++i) if((actual[i]>>24)!=expected[i]) {match=false;break;}
+        } else {
+            unsigned short native[32*32]{};vt::Target target{native,32,0,0,31,31};
+            vt::DrawCellAA(target,*cell,4,4,16,0x07FF,vt::RGB565);
+            for(int y=0;y<32;++y) for(int x=0;x<32;++x) {
+                const int coverage=(expected[y*32+x]+ss*ss/2)/(ss*ss);
+                if(native[y*32+x]!=vt::Blend(0,0x07FF,coverage,vt::RGB565,x,y)) match=false;
+            }
+        }
+        if(!match) {printf("vertical phase mismatch U+%04X size=%d ss=%d density=%d phase=%d\n",cp,latinSize,ss,density,verticalPhase);++failures;}
+        ++verticalChecks;
+    }
+    printf("independent vertical-phase comparisons: %d\n",verticalChecks);
     printf("%s: %d fixed-baseline bitmap comparisons failed\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

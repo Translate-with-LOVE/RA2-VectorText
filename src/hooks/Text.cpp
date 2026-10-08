@@ -1,9 +1,15 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 #include "LayoutState.h"
+#include "../PixelWriter.h"
 
 // Text-call observation, loading surface tracking and tooltip block placement.
 using namespace vt::hooks;
+
+namespace
+{
+thread_local DWORD subtitleDoneEsp = 0;
+}
 
 // ---------------------------------------------------------------------------
 // Drawing::PrintUnicode @ 0x4A61C0: observe the format string at [esp+8].
@@ -51,6 +57,14 @@ VT_DEFINE_HOOK(yra::BitText_Print, VT_Hook_BitText_Print, yra::BitText_PrintSz)
 // ---------------------------------------------------------------------------
 VT_DEFINE_HOOK(yra::BitText_DrawText, VT_Hook_BitText_DrawText, yra::BitText_DrawTextSz)
 {
+    if (R->Stack32(0) == yra::Subtitle_DrawDone && vt::Cfg::Mode() == vt::Cfg::Mode_Draw)
+    {
+        // DrawText pops ten arguments; its caller resumes 44 bytes above
+        // this entry. Capture real draw positions, including wrapped rows,
+        // fallback layout, negative bearings and the independent output raster.
+        subtitleDoneEsp = R->ESP() + 0x2C;
+        vt::BeginTextInkCapture(vt::Cfg::ConfigBool("SubtitleOutline", true));
+    }
     if (vt::Cfg::Mode() == vt::Cfg::Mode_Draw)
     {
         __try
@@ -84,5 +98,32 @@ VT_DEFINE_HOOK(yra::BitText_DrawText, VT_Hook_BitText_DrawText, yra::BitText_Dra
     arg.offset = 0xC;
     arg.fromReg = false;
     ReportText(vt::Hook_BitText_DrawText, R, arg, 10, 4, "");
+    return 0;
+}
+
+VT_DEFINE_HOOK(yra::Subtitle_DrawDone, VT_Hook_Subtitle_DrawDone, yra::Subtitle_DrawDoneSz)
+{
+    vt::TextInkRect ink{};
+    const bool sameFrame = subtitleDoneEsp && subtitleDoneEsp == R->ESP();
+    subtitleDoneEsp = 0;
+    if (!vt::EndTextInkCapture(&ink) || !sameFrame || !RangeOk((void *)(uintptr_t)R->ESP(), 0x28))
+        return 0;
+    const int x = (int)R->Stack32(0x10), y = (int)R->EDI();
+    const int width = (int)R->Stack32(0x14), height = (int)R->Stack32(0x24);
+    if (x < -32768 || x > 32768 || y < -32768 || y > 32768 || width < 0 || width > 32768 || height < 0 ||
+        height > 32768)
+        return 0;
+    const int left = ink.left < x ? ink.left : x;
+    const int top = ink.top < y ? ink.top : y;
+    const int right = ink.right > x + width ? ink.right : x + width;
+    const int bottom = ink.bottom > y + height ? ink.bottom : y + height;
+    *(int *)(uintptr_t)(R->ESP() + 0x10) = left;
+    *(int *)(uintptr_t)(R->ESP() + 0x14) = right - left;
+    *(int *)(uintptr_t)(R->ESP() + 0x24) = bottom - top;
+    R->edi = top;
+    static LONG logged = 0;
+    if (InterlockedIncrement(&logged) <= 3)
+        vt::Log::Note("SUBTITLE erase: native=(%d,%d,%d,%d) ink=(%d,%d,%d,%d) dirty=(%d,%d,%d,%d)", x, y, width, height,
+                      ink.left, ink.top, ink.right, ink.bottom, left, top, right - left, bottom - top);
     return 0;
 }

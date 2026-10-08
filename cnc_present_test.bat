@@ -11,6 +11,7 @@ copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
 if "%~1"=="--2x-only" goto output2
 if "%~1"=="--perf-only" goto performance
 if "%~1"=="--fractional-only" goto fractional
+if "%~1"=="--stretch-only" goto stretched
 for %%R in (direct3d9 opengl gdi) do (
     >ddraw.ini echo [ddraw]
     >>ddraw.ini echo renderer=%%R
@@ -88,6 +89,8 @@ popd
 exit /b %RC%
 
 :fractional_checks
+call :stretch_checks
+if errorlevel 1 exit /b 1
 for %%S in (1.25 1.5 1.75 2.25 2.5) do (
     call :configure_fraction %%S
     echo [*] cnc-ddraw fractional output %%S
@@ -104,6 +107,32 @@ cnc_present_test.exe --fractional 1.5
 set "VT_FRACTION_RC=%ERRORLEVEL%"
 copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
 exit /b %VT_FRACTION_RC%
+
+:stretched
+call :stretch_checks
+set "RC=%ERRORLEVEL%"
+popd
+exit /b %RC%
+
+:stretch_checks
+call :configure2 3072 1728
+echo [*] cnc-ddraw original startup scale 4.8x3.6 with independent 5x glyphs
+cnc_present_test.exe --fractional 4.8 3.6
+if errorlevel 1 exit /b 1
+call :configure2 1536 864
+echo [*] cnc-ddraw widescreen output 2.4x1.8
+cnc_present_test.exe --fractional 2.4 1.8
+if errorlevel 1 exit /b 1
+call :configure2 1536 864
+>VectorText.ini echo [VectorText]
+>>VectorText.ini echo Enabled=true
+>>VectorText.ini echo Mode=draw
+>>VectorText.ini echo Present32=true
+>>VectorText.ini echo HiDPI=false
+cnc_present_test.exe --fractional 2.4 1.8
+set "VT_STRETCH_RC=%ERRORLEVEL%"
+copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+exit /b %VT_STRETCH_RC%
 
 :configure_fraction
 set "VT_TEST_WIDTH=960"

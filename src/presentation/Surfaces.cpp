@@ -44,6 +44,20 @@ bool InBounds(PixelRect r, const DDSURFACEDESC2 &d)
 // and seven stack arguments. It is also used by software DSurface blits.
 GameCopy realGameCopy = nullptr;
 thread_local int gameCopyDepth = 0;
+struct CopyPublication
+{
+    Buffer* buffer;
+    PixelRect rect;
+    bool finalized=false;
+    CopyPublication* prior;
+};
+thread_local CopyPublication* pendingCopy=nullptr;
+void FinalizeCopy(CopyPublication& copy)
+{
+    if(!copy.buffer || copy.finalized) return;
+    copy.buffer->plane.ResolveSubtitleNative(copy.buffer->base,copy.buffer->pitch,copy.rect);
+    copy.finalized=true;
+}
 bool GameDescription(void *object, DDSURFACEDESC2 &d, void *&native)
 {
     if (!object)
@@ -192,13 +206,22 @@ bool __fastcall HookGameCopy(void *dest, const int *dr, void *source, const int 
     // bytes: this operation already synchronizes its region.
     if (saved)
         ++gameCopyDepth;
+    CopyPublication publication{saved ? db.get() : nullptr,d,false,pendingCopy};
+    pendingCopy=&publication;
     const bool ok = realGameCopy(dest, dr, source, sr, copier, remap, mode, amount, extra);
+    pendingCopy=publication.prior;
     if (saved)
         --gameCopyDepth;
     if (!ok && saved)
     {
         Guard guard;
         db->plane = *saved;
+    }
+    if (ok && saved) {
+        Guard guard;
+        // CPU-only helpers may not call DDS Unlock; retain the post-copy
+        // fallback. Normal game copies finalized before waking the renderer.
+        FinalizeCopy(publication);
     }
     return ok;
 }
@@ -245,9 +268,11 @@ HRESULT WINAPI HookBlt(void *dest, RECT *dr, void *source, RECT *sr, DWORD flags
     DDSURFACEDESC2 dd{}, sd{};
     std::shared_ptr<Buffer> db;
     std::unique_ptr<PixelPlane> saved;
+    PixelRect copied{};
     if (Describe(dest, dd) && (!source || Describe(source, sd)))
     {
         PixelRect d = Rect(dr, dd), s = Rect(sr, sd);
+        copied=d;
         // Unsupported raster ops do not enter the high-precision copy path.
         const DWORD supported = DDBLT_WAIT | DDBLT_ASYNC | DDBLT_COLORFILL | DDBLT_KEYSRC | DDBLT_KEYDEST |
                                 DDBLT_KEYSRCOVERRIDE | DDBLT_KEYDESTOVERRIDE | DDBLT_DDFX;
@@ -286,6 +311,10 @@ HRESULT WINAPI HookBlt(void *dest, RECT *dr, void *source, RECT *sr, DWORD flags
         Guard guard;
         db->plane = *saved;
     }
+    if (SUCCEEDED(hr) && db && saved) {
+        Guard guard;
+        db->plane.ResolveSubtitleNative(db->base,db->pitch,copied);
+    }
     return hr;
 }
 using BltFast = HRESULT(WINAPI *)(void *, DWORD, DWORD, void *, RECT *, DWORD);
@@ -294,9 +323,11 @@ HRESULT WINAPI HookBltFast(void *dest, DWORD x, DWORD y, void *source, RECT *sr,
     DDSURFACEDESC2 dd{}, sd{};
     std::shared_ptr<Buffer> db;
     std::unique_ptr<PixelPlane> saved;
+    PixelRect copied{};
     if (Describe(dest, dd) && Describe(source, sd))
     {
         PixelRect s = Rect(sr, sd), d{(int)x, (int)y, (int)x + s.right - s.left, (int)y + s.bottom - s.top};
+        copied=d;
         if (InBounds(s, sd) && InBounds(d, dd))
         {
             Guard guard;
@@ -318,6 +349,10 @@ HRESULT WINAPI HookBltFast(void *dest, DWORD x, DWORD y, void *source, RECT *sr,
     {
         Guard guard;
         db->plane = *saved;
+    }
+    if (SUCCEEDED(hr) && db && saved) {
+        Guard guard;
+        db->plane.ResolveSubtitleNative(db->base,db->pitch,copied);
     }
     return hr;
 }
@@ -345,6 +380,15 @@ HRESULT WINAPI HookUnlock(void *object, void *rectOrAddress)
     {
         Guard guard;
         auto found = state->surfaces.find(object);
+        if(gameCopyDepth && found!=state->surfaces.end() && found->second.buffer) {
+            for(auto* copy=pendingCopy;copy;copy=copy->prior)
+                if(copy->buffer==found->second.buffer.get()) {
+                    // cnc-ddraw Unlock wakes its renderer (and can delay its
+                    // return for frame limiting). Finish native markers while
+                    // pixels and metadata still belong to the same frame.
+                    FinalizeCopy(*copy);break;
+                }
+        }
         if (!gameCopyDepth && found != state->surfaces.end() && found->second.buffer)
         {
             auto &s = found->second;

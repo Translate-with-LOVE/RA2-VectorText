@@ -24,24 +24,26 @@ struct FontData {
 #pragma pack(pop)
 
 static vt::PixelPlane* previewPlane = nullptr;
+static int previewRaster = 2;
 static int PaintPreview(const vt::Target& target, const vt::GlyphCell& cell,
                         int x, int y, int rows, unsigned short color, bool) {
     previewPlane->Paint(cell, x, y, rows, color,
-        {target.clipL, target.clipT, target.clipR + 1, target.clipB + 1}, target.base, target.pitch);
+        {target.clipL, target.clipT, target.clipR + 1, target.clipB + 1}, target.base, target.pitch,
+        vt::SubtitleOutlineActive());
     return 1;
 }
 
 static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels, int w, int h,
                      const vt::PixelPlane* plane = nullptr, bool guides = false, int rowCount = 0, int rowStep = 23,
                      bool hidpi = false, bool linear = true) {
-    const int scale = hidpi ? 2 : 1, outputW = w * scale, outputH = h * scale;
+    const int scale = hidpi ? previewRaster : 1, outputW = w * scale, outputH = h * scale;
     // Use the same independent 2x samples and encoded overlay as D3D9.
     // The base scene is nearest-neighbour here; cnc-ddraw's scene shader is
     // deliberately outside this offline text preview.
     std::vector<unsigned int> overlay;
     if (hidpi) {
         overlay.resize((size_t)outputW * outputH);
-        plane->Overlay2Rect(overlay.data(), outputW, {0, 0, w, h});
+        plane->OverlayRect(overlay.data(), outputW, {0, 0, w, h},scale);
     }
     int pitch = (outputW * 3 + 3) & ~3;
     std::vector<unsigned char> bmp(54 + pitch * outputH, 0);
@@ -89,6 +91,10 @@ static void WriteBmp(const char* path, const std::vector<unsigned short>& pixels
 int main(int argc, char** argv) {
     const char* output = argc > 1 ? argv[1] : "preview.bmp";
     bool check = false, line = false, scene = false, bgra = false, guides = false, hidpi = false, loading = false;
+    bool subtitles = false;
+    bool yellowSubtitles = false;
+    bool startup = false;
+    const char* movieBackground = nullptr;
     for (int i = 2; i < argc; ++i) {
         if (!strcmp(argv[i], "--check")) check = true;
         if (!strcmp(argv[i], "--line")) line = true;
@@ -97,6 +103,11 @@ int main(int argc, char** argv) {
         if (!strcmp(argv[i], "--guides")) guides = true;
         if (!strcmp(argv[i], "--hidpi")) hidpi = true;
         if (!strcmp(argv[i], "--loading")) loading = true;
+        if (!strcmp(argv[i], "--subtitles")) subtitles = true;
+        if (!strcmp(argv[i], "--yellow-subtitles")) subtitles = yellowSubtitles = true;
+        if (!strcmp(argv[i], "--startup")) startup = true;
+        if (!strcmp(argv[i], "--movie-background") && i+1<argc) movieBackground=argv[++i];
+        if (!strcmp(argv[i], "--raster") && i+1<argc) previewRaster=std::max(2,std::min(8,atoi(argv[++i])));
     }
     if ((hidpi && !bgra) || (guides && (hidpi || loading))) {
         printf("--hidpi requires --bgra; --guides uses the standard 1x samples\n"); return 2;
@@ -132,13 +143,23 @@ int main(int argc, char** argv) {
         L"任务目标一: 保护天气控制机",
         L"任务目标二: 消灭敌军部队"
     };
+    if (subtitles) rows.assign(6,L"我相信可以用它将部队送回之前的时间，");
+    if (yellowSubtitles) rows.assign(6,L"尤里的部队已经成功地启动了两部心灵控制器装置，");
+    if (movieBackground && subtitles) {
+        rows.resize(2);
+        if(!yellowSubtitles) rows.assign(2,L"如果我的装置顺利运作了，谭雅小姐，");
+    }
+    if (startup) rows={L"读取中 ...",L"© 2000, 2001 美国艺电公司 保留所有权利",
+        L"WESTWOOD STUDIOS 是美国艺电的一个品牌",L"命令与征服 以及 尤里的复仇 是商标或注册商标",
+        L"美国艺电股份有限公司在美国和/或其他国家的商标。"};
+    if(hidpi) vt::SetOutputRasterScale(previewRaster);
     const int rowCount = (int)rows.size();
     unsigned char bf[128] = {};
     *(void**)(bf + 4) = &fd;
-    int w = loading ? 420 : 720;
+    int w = movieBackground ? 800 : subtitles ? 320 : startup ? 440 : loading ? 420 : 720;
     const int rowStep = guides ? 40 : 23;
-    const int h = loading ? 104 : guides ? rowCount*rowStep+12 : 320;
-    const auto rowY = [&](int row) { return loading && row ? 56 + (row-1)*20 : 6 + row*rowStep; };
+    const int h = movieBackground ? 600 : (subtitles || startup) ? rowCount*rowStep+12 : loading ? 104 : guides ? rowCount*rowStep+12 : 320;
+    const auto rowY = [&](int row) { return movieBackground ? h-76+row*rowStep : loading && row ? 56 + (row-1)*20 : 6 + row*rowStep; };
     // The preview canvas must contain the complete natural-width sample.
     // Measurement does not require a locked surface; allow both side margins.
     if (line) for (const wchar_t* row : rows) {
@@ -157,6 +178,28 @@ int main(int argc, char** argv) {
             pixels[y * w + x] = (unsigned short)((red << 11) | (green << 5) | blue);
         }
     }
+    if(subtitles && !movieBackground) for(int y=0;y<h;++y) for(int x=0;x<w;++x) {
+        const int pair=std::min(2,y/(rowStep*2));
+        const int grey=pair==0 ? 0 : pair==1 ? 255 : ((x/12+y/9)%2 ? 210 : 25);
+        pixels[y*w+x]=(unsigned short)(((grey*31/255)<<11)|((grey*63/255)<<5)|(grey*31/255));
+    }
+    if(movieBackground) {
+        HBITMAP bitmap=(HBITMAP)LoadImageA(nullptr,movieBackground,IMAGE_BITMAP,0,0,LR_LOADFROMFILE|LR_CREATEDIBSECTION);
+        BITMAP info{};
+        if(!bitmap || !GetObject(bitmap,sizeof(info),&info) || info.bmWidth!=w || info.bmHeight!=h) {
+            if(bitmap) DeleteObject(bitmap);
+            printf("FAIL: movie background must be an 800x600 BMP\n");return 2;
+        }
+        BITMAPINFO format{};format.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);
+        format.bmiHeader.biWidth=w;format.bmiHeader.biHeight=-h;
+        format.bmiHeader.biPlanes=1;format.bmiHeader.biBitCount=32;format.bmiHeader.biCompression=BI_RGB;
+        std::vector<uint32_t> rgb(w*h);
+        HDC dc=CreateCompatibleDC(nullptr);
+        const int copied=GetDIBits(dc,bitmap,0,h,rgb.data(),&format,DIB_RGB_COLORS);
+        DeleteDC(dc);DeleteObject(bitmap);
+        if(copied!=h) return 2;
+        for(size_t i=0;i<rgb.size();++i) pixels[i]=(unsigned short)((((rgb[i]>>19)&31)<<11)|(((rgb[i]>>10)&63)<<5)|((rgb[i]>>3)&31));
+    }
     vt::PlaneOptions planeOptions;
     planeOptions.linear = vt::Cfg::LinearBlend(); planeOptions.gamma = vt::Cfg::Gamma();
     planeOptions.antialias = vt::Cfg::AntiAlias(); planeOptions.outline = vt::Cfg::Outline();
@@ -169,8 +212,14 @@ int main(int argc, char** argv) {
     *(int*)(bf + 56) = w - 1; *(int*)(bf + 60) = h - 1;
     int fails = 0;
     for (int r = 0; r < rowCount; ++r) {
-        *(unsigned short*)(bf + 36) = loading ? 0xFFFF : r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
+        *(unsigned short*)(bf + 36) = subtitles ? (yellowSubtitles ? 0xFFE0 : 0x001F) : (loading || startup) ? 0xFFFF : r == 0 ? 0xF800 : (r >= 5 ? 0xFFFF : 0x07FF);
+        if(subtitles) vt::BeginTextInkCapture((r&1)!=0);
         int x = 4, y = rowY(r);
+        if(movieBackground) {
+            int measured=0;
+            if(!vt::Takeover::MeasureDynamicWidth(bf,rows[r],0,&measured)) return 3;
+            x=std::max(4,(w-measured)/2);
+        }
         if (line && !vt::Takeover::BeginLine(bf, rows[r], -1, x, y, x, 0, 0, 0x43464D)) ++fails;
         for (const wchar_t* p = rows[r]; *p; ++p) {
             int oldWidth = fd.bitmaps[(fd.symbols[*p] - 1) * fd.bytes];
@@ -182,6 +231,7 @@ int main(int argc, char** argv) {
             x = nextX;
         }
         vt::Takeover::EndLine(bf);
+        if(subtitles) { vt::TextInkRect ink{};vt::EndTextInkCapture(&ink); }
     }
     if (data != original) { printf("FAIL: game metrics/data changed\n"); ++fails; }
     if (bgra) {
@@ -191,6 +241,7 @@ int main(int argc, char** argv) {
             const auto p = plane.At(x, y);
             if (p.high) for (int i = 1; i < 4; ++i)
                 independentSamples |= p.samples[i].a != p.samples[0].a;
+            if(p.grid) for(const auto& sample:p.grid->pixels) independentSamples |= sample.a!=p.grid->pixels[0].a;
         }
         if (hidpi && !independentSamples) { printf("FAIL: 2x preview has no independent output samples\n"); ++fails; }
         for (int x = 0; x < w; ++x)

@@ -60,7 +60,8 @@ HRESULT WINAPI HookPrimitive(void *object, D3DPRIMITIVETYPE type, UINT start, UI
             auto &t = it->second;
             float sx = 0, sy = 0;
             const bool scaled = OutputScale(t, vertices, sx, sy);
-            const bool doubled = fabs(sx - 2.0f) < 0.0001f && fabs(sy - 2.0f) < 0.0001f;
+            const bool doubled = fabs(sx - t.rasterScale) < 0.0001f && fabs(sy - t.rasterScale) < 0.0001f;
+            if(scaled) SetOutputRasterScale((int)ceil(std::min(8.0f,std::max(sx,sy))-0.0001f));
             if (scaled && !t.overlayAttempted)
             {
                 t.overlayAttempted = true;
@@ -72,21 +73,25 @@ HRESULT WINAPI HookPrimitive(void *object, D3DPRIMITIVETYPE type, UINT start, UI
                 if (!t.overlay)
                     Log::Note("Present32: output text scale=1 (text atlas unavailable)");
             }
-            if (scaled && t.overlay && fabs(t.reportedScale - sx) > 0.0001f)
+            if (scaled && t.overlay && (fabs(t.reportedScale - sx) > 0.0001f || fabs(t.reportedScaleY - sy) > 0.0001f))
             {
                 t.reportedScale = sx;
-                Log::Note("Present32: output text scale=%.4g viewport=%.0fx%.0f logical=%dx%d raster=2 filter=%s", sx,
-                          vertices[2].x - vertices[0].x, vertices[0].y - vertices[1].y, primary->width, primary->height,
-                          doubled ? "point" : "linear");
+                t.reportedScaleY = sy;
+                Log::Note("Present32: output text scale=%.4gx%.4g viewport=%.0fx%.0f logical=%dx%d requested-raster=%d atlas-raster=%d filter=%s",
+                          sx, sy, vertices[2].x - vertices[0].x, vertices[0].y - vertices[1].y, primary->width,
+                          primary->height, OutputRasterScale(),t.rasterScale,doubled ? "point" : "linear");
             }
             if (!scaled)
-                t.reportedScale = 0;
+                t.reportedScale = t.reportedScaleY = 0;
             // Only frames whose world upload excluded its old text get an
             // overlay. First frame and any failure keep the 1x composition.
             const auto overlayStart = Stamp();
             overlay = t.cleanWorld && t.overlay && !t.overlayTiles.empty() &&
                       SUCCEEDED(device->CreateStateBlock(D3DSBT_ALL, &saved));
-            t.overlayReady = scaled && t.overlay;
+            // Readiness describes the observed output, not whether an atlas
+            // is currently allocated. UploadOverlay can recreate an atlas
+            // after a density change or retry a transient allocation failure.
+            t.overlayReady = scaled && t.device;
             if (overlay)
             {
                 const HRESULT hr = original(object, type, start, count);
@@ -151,6 +156,7 @@ HRESULT WINAPI HookTextureLock(void *object, UINT level, D3DLOCKED_RECT *out, co
     HRESULT hr = original(object, level, out, rect, flags);
     if (FAILED(hr) || level || !out)
         return hr;
+    auto primary=Primary();
     Guard guard;
     auto it = state->textures.find(object);
     if (it == state->textures.end())
@@ -160,6 +166,13 @@ HRESULT WINAPI HookTextureLock(void *object, UINT level, D3DLOCKED_RECT *out, co
     t.native = *out;
     int w = t.rect.right - t.rect.left, h = t.rect.bottom - t.rect.top;
     t.scratch.resize((size_t)w * h);
+    // cnc-ddraw stages the native pixels between LockRect and UnlockRect.
+    // The game can already be writing the next frame by the latter call.
+    // Freeze its matching text metadata now; old uploads must never validate
+    // (and erase) the game thread's newer live plane.
+    t.framePlane.reset();
+    if(primary && t.rect.left==0 && t.rect.top==0 && w==primary->width && h==primary->height)
+        t.framePlane=std::make_unique<PixelPlane>(primary->plane);
     t.locked = true;
     out->pBits = t.scratch.data();
     out->Pitch = w * 2;
@@ -175,7 +188,6 @@ HRESULT WINAPI HookTextureUnlock(void *object, UINT level)
     }
     if (!tracked)
         return original(object, level);
-    auto primary = Primary();
     {
         Guard guard;
         auto it = state->textures.find(object);
@@ -186,15 +198,16 @@ HRESULT WINAPI HookTextureUnlock(void *object, UINT level)
             auto *output = (uint32_t *)t.native.pBits;
             // Native updates use a full game-sized rectangle beginning at
             // zero; unsupported partial updates still get valid 32-bit RGB.
-            if (primary && t.rect.left == 0 && t.rect.top == 0 && w == primary->width && h == primary->height)
+            if (t.framePlane)
             {
                 const auto uploadStart = Stamp();
-                primary->plane.ValidateNative(t.scratch.data(), w);
-                t.cleanWorld = t.overlayReady && UploadOverlay(t, primary->plane);
+                auto& frame=*t.framePlane;
+                frame.ValidateNative(t.scratch.data(), w);
+                t.cleanWorld = t.overlayReady && UploadOverlay(t, frame);
                 if (t.cleanWorld)
-                    primary->plane.BackgroundRect(t.scratch.data(), w, output, t.native.Pitch / 4, {0, 0, w, h});
+                    frame.BackgroundRect(t.scratch.data(), w, output, t.native.Pitch / 4, {0, 0, w, h});
                 else
-                    primary->plane.CompositeRect(t.scratch.data(), w, output, t.native.Pitch / 4, {0, 0, w, h});
+                    frame.CompositeRect(t.scratch.data(), w, output, t.native.Pitch / 4, {0, 0, w, h});
                 state->stats.uploadMs += Elapsed(uploadStart);
                 ++state->stats.uploads;
                 RecordFrame(output, w, h, t.native.Pitch / 4);
@@ -208,6 +221,7 @@ HRESULT WINAPI HookTextureUnlock(void *object, UINT level)
                             PixelPlane::Expand565(t.scratch[(size_t)y * w + x]);
             }
             t.locked = false;
+            t.framePlane.reset();
         }
     }
     return original(object, level);

@@ -97,6 +97,12 @@ namespace yra
     constexpr unsigned int BitText_DrawText             = 0x00434CD0u;
     constexpr unsigned int BitText_DrawTextSz           = 5;
 
+    // Movie subtitle draw has returned; locals +10=X, +14=width, +24=height,
+    // EDI=Y. Native code saves these as the next erase rectangle at object+14.
+    // Replay: mov edx,ebp / add ebx,24h (2+3), before copying the old rectangle.
+    constexpr unsigned int Subtitle_DrawDone            = 0x006C9E7Du;
+    constexpr unsigned int Subtitle_DrawDoneSz          = 5;
+
     // BitFont::Blit  (__thiscall)  -- hottest path: once per glyph
     //     ECX = BitFont* this
     //     [esp+4] = wchar_t wch  [esp+8] = int X  [esp+0xC] = int Y  [esp+0x10] = int nColor

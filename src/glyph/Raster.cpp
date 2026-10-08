@@ -9,7 +9,7 @@ namespace vt
 {
 // Called only on a cache miss with m_cs held. The same transform is
 // reused for the logical coverage and optional presentation raster.
-bool GlyphSource::Rasterize(unsigned int codepoint, int gameAdvance, int phase, int scale1024, unsigned long long key,
+bool GlyphSource::Rasterize(unsigned int codepoint, int gameAdvance, int phase, int scale1024, int verticalPhase, unsigned long long key,
                             GlyphCell &cell)
 {
     RasterContext context{};
@@ -29,8 +29,8 @@ bool GlyphSource::Rasterize(unsigned int codepoint, int gameAdvance, int phase, 
     mat.yx = 0;
     mat.yy = scale1024 * 64;
     delta.x = (FT_Pos)(phase * 16 * m_ss); // quarter pixels -> rasteriser space
-    delta.y = 0;
-    FT_Set_Transform(face, &mat, phase ? &delta : NULL);
+    delta.y = (FT_Pos)(-verticalPhase * 16 * m_ss); // screen Y grows downwards
+    FT_Set_Transform(face, &mat, phase || verticalPhase ? &delta : NULL);
 
     const bool aa = m_aa;
     // LIGHT preserves spacing while aligning horizontal strokes to the

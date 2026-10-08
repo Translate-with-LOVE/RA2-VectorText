@@ -6,9 +6,9 @@
 namespace vt::Presentation32::detail
 {
 using CreateTexture = HRESULT(WINAPI *)(void *, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, void **, HANDLE *);
-bool AtlasShape(size_t count, int maxWidth, int maxHeight, int &width, int &height, int &columns);
+bool AtlasShape(size_t count, int maxWidth, int maxHeight, int &width, int &height, int &columns,int scale=2);
 void PackOverlay(const PixelPlane &plane, const std::vector<PixelRect> &tiles, uint32_t *output, int pitch,
-                 int columns);
+                 int columns,int scale=2);
 bool OutputScale(const Texture &t, const ScreenVertex (&vertices)[4], float &sx, float &sy);
 bool ResizeAtlas(Texture &t, size_t count);
 bool UploadOverlay(Texture &t, const PixelPlane &plane);

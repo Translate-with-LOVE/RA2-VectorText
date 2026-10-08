@@ -11,6 +11,7 @@
 任务加载目标框和战役消息背景按自然文字宽度留余量；不修改文本或伪造字符数量。
 tooltip 也按自然宽度测量，保留原生内边距和右边界限制。
 tooltip、任务消息和侧栏“就绪”等状态标签的背景高度按实际笔画范围留上下边距，多行提示保留原行距。
+原版过场字幕按实际绘字范围保存下一帧的擦除矩形，避免换句后残留旧颜色的逗号、负向笔画或高清采样边缘。
 任务消息的高度调整在 Phobos 半透明背景 hook 之前完成，兼容安装、关闭或未安装 Phobos 的路径。
 
 配置、实现边界、hook 约定及验证方法见 [最终渲染说明](docs/rendering.md)。
@@ -78,9 +79,10 @@ cmake --build --preset deploy
 | `Enabled` | `true` | 控制日志和 32 位呈现启动。关闭全部矢量接管应使用 `Mode=off`，仅设为 `false` 不会关闭 RGB565 绘制。 |
 | `Mode` | `observe` | `off` 使用原生文字；`observe` 仅观测；`draw` 矢量绘制。不区分大小写，未知值按 `observe` 处理。 |
 | `LineRender` | `false` | 单行自然排版，统一计算字距、kerning 和标点间距。需 `Mode=draw`，且不能使用 `Metrics=vector` 或大于 1 的 `AdvanceScale`；关闭时逐字绘制。 |
+| `MixedScriptCenter` | `true` | 自然单行中，中英文混排时按英文大写高度与中文字面居中英文整段。所有英文共用同一基线偏移，保留字体自身的上标和下伸笔画；纯英文和纯中文行不移动。 |
 | `LegacyCodepage1252` | `true` | 将 `U+0080～U+009F` 中 27 个旧码位按 Windows-1252 映射为 Unicode 字形；`false` 严格按原始 Unicode 解释。不修改 CSF 或正确的 Unicode 字符。 |
 | `Present32` | `true` | 检测 cnc-ddraw，在 BGRA8 呈现阶段合成文字，提高抗锯齿边缘的颜色精度。关闭、无 cnc-ddraw 或接入失败时使用 RGB565。 |
-| `HiDPI` | `true` | 在 `Present32` 路径下跟随 D3D9 实际等比放大倍率，支持 1.25×、1.5×、1.75× 等小数倍。复用独立 2× 字形采样：精确 2× 使用点采样，其他放大倍率由 GPU 线性过滤；超过 2× 不等同于原生更高倍率栅格化。1×、非等比或其他后端保留原合成；`false` 关闭高清文字层。 |
+| `HiDPI` | `true` | 在 `Present32` 路径下跟随 D3D9 实际 X/Y 放大倍率，按较大倍率向上取整生成独立 2～8× 字形，再由 GPU 投影到输出尺寸。4.8×3.6 开场使用直接栅格化的 5× 字形；两轴等于栅格密度时点采样，否则线性过滤。任一轴不放大或其他后端保留原合成；`false` 关闭高清文字层。 |
 | `DynamicTextWidth` | `true` | 单行布局启用时，按自然文字宽度调整加载目标框、任务消息、tooltip 和侧栏状态背景；同时处理相应墨迹高度与内边距。关闭时保留原矩形度量。 |
 | `LineWidthPadding` | `4` | 自然宽度测量的额外余量，限制为 1～32px。任务消息左右合计至少留 4px；tooltip 还会添加原生内边距。 |
 | `Metrics` | `scaled` | 逐字路径的度量策略：`game` 使用原字宽；`scaled` 使用原字宽乘 `AdvanceScale`；`vector` 使用矢量字体字宽。后两者可能改写游戏字宽并改变布局；推荐 `game` 配合单行排版。 |
@@ -102,6 +104,7 @@ cmake --build --preset deploy
 | `Dither` | `true` | RGB565 回写时对量化阈值加入轻微 Bayer 抖动，减轻色阶；BGRA8 最终文字合成不需要该抖动。 |
 | `Outline` | `0` | 灰度文字描边，`0` 关闭，非零开启；值限制为 0～2。描边需 `AntiAlias=true`。 |
 | `OutlineColor` | `0x0000` | 描边颜色，按 16 位 RGB565 色值解析；支持十六进制，`0x0000` 为黑色。仅开启描边时生效。 |
+| `SubtitleOutline` | `true` | 过场字幕保留原色；亮字用约半像素黑边，暗字用白内缘和黑外缘各约四分之一像素（至少一个高清采样像素），避免白边过重。边缘颜色保持稳定，不随背景像素切换；RGB565 回退为 1px。 |
 | `Detailed` | `true` | 收集独特字符串和详细调用信息；关闭时以计数统计为主，减少动态金额、计时文本持续建表和写盘的开销。 |
 | `LogBitFontBlitDetails` | `false` | 逐字 Blit 详细日志，需同时启用 `Enabled` 和 `Detailed`；正常游戏建议关闭。 |
 | `MaxUniqueStrings` | `4000` | 详细日志收集的独特字符串数量上限，最小 16；达到上限后继续累计调用统计，不再加入新字符串。 |
@@ -128,16 +131,18 @@ cmake --build --preset deploy
 | `takeover_test.bat` | 单行拒绝后的逐字接管、颜色、抗锯齿、裁剪和缺字回退 |
 | `hooktest_draw.bat --mode draw` | 逐字 hook 的 ESP/EAX、返回跳板与拒绝路径；仅支持 `off`、`observe`、`draw` |
 | `python tools\preview_guides.py` | 显示上、中、下辅助线与实际墨迹范围，完整行按最近邻放大 |
-| `python tools\verify_dll.py` | DLL 导出、15 条钩子记录、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
+| `python tools\verify_dll.py` | DLL 导出、16 条钩子记录、字幕擦除机器码、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
 
 预览图输出到 `build/render-qa/`。离线通过仍需结合实际游戏画面验收。
-当前 22 项离线 CTest 通过，包含加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数倍率图集采样对照。
+当前 22 项离线 CTest 通过，包含字幕换色后的完整擦除、高清采样边缘、加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数和非等比倍率图集采样对照。
 本机 D3D9、OpenGL、GDI 显示检查均通过，D3D9 的 2×、小数倍率、动态缩放和全屏回退检查也通过；其他机器、驱动和 cnc-ddraw 版本仍需验证。
 游戏目录的 `VectorText.log` 记录 `LINE ready`、`LINE fallback`、`LINE native icon`
 和 `DYNAMIC width`，可确认实际调用是否命中。
 加载界面的原生 `BSurface` 内存目标也接入高精度文字层，复制到显示表面时保留独立的 2× 采样。
-`output text scale=2` 只说明呈现器启用了 2×，不能证明所有绘字目标均已接管；
+`output text scale=2x2` 只说明呈现器启用了 2×，不能证明所有绘字目标均已接管；
 `CPU text surface registered ... hi-raster=1` 可确认加载内存表面已登记。最终效果仍需重启游戏后检查。
+原版 800×600 拉伸到 3840×2160 时，日志应显示 `output text scale=4.8x3.6`；
+`SUBTITLE erase` 记录原擦除框、实际笔画和扩大的擦除框。开场图片、Logo 和图片内的预制文字仍使用原素材。
 
 保留的诊断工具：`tools/analyze_log.py` 汇总实际日志，`tools/find_callers.py` 扫描游戏原生调用点，
 `tools/screenshot_diff.py` 比较同一静态画面的截图。各工具支持 `--help`。

@@ -10,7 +10,7 @@
 //
 //  GlyphCell is our own structure, not a serialized game.fnt record. Its 1bpp
 //  mask uses the game's MSB-first row layout; grayscale coverage and optional
-//  2x rasters serve RGB565 drawing and presentation overlays.
+//  2..8x rasters serve RGB565 drawing and presentation overlays.
 //
 //  Latin and CJK keep separate faces when their size or font differs, avoiding
 //  FT_Set_Pixel_Sizes calls on each script switch.
@@ -21,6 +21,7 @@ namespace vt
 struct GlyphRaster2
 {
     int left = 0, top = 0, width = 0, rows = 0;
+    int scale = 2; // independent outline raster samples per logical pixel
     std::vector<unsigned char> coverage;
 };
 struct GlyphCell
@@ -31,7 +32,7 @@ struct GlyphCell
     int inkX;                          // natural glyph bearing, in pixels
     int inkY, inkRows;                 // natural vertical bearing/height; 0 rows = legacy cell
     int advanceQ, inkLeftQ, inkRightQ; // quarter-pixel natural metrics
-    const GlyphRaster2 *raster2;       // optional outline raster at 2x; cache-owned
+    const GlyphRaster2 *raster2;       // optional outline raster; scale identifies density; cache-owned
 };
 
 class GlyphSource
@@ -76,9 +77,10 @@ class GlyphSource
 
     // Grayscale grid fitting: 0=light (vertical), 1=normal, 2=unhinted.
     // With Supersample=1, the logical raster is hinted on its 1x grid;
-    // the optional high-resolution face is hinted separately at 2x.
+    // the optional high-resolution face is hinted at its output density.
     void SetHinting(int mode);
     void SetHighResolution(bool on);
+    void SetHighResolutionScale(int scale);
 
     bool Ready() const { return m_faceA != NULL; }
     void *FaceHandle() const { return m_faceA; } // Latin face
@@ -96,7 +98,12 @@ class GlyphSource
     // integer positions while the ink lands on a fractional pen position.
     // Direct pixel drawing preserves vertical bearings for every script,
     // even when horizontal fitting uses an explicit legacy advance.
-    const GlyphCell *Get(unsigned int codepoint, int gameAdvance, int phase = 0, int scale1024 = 1024);
+    const GlyphCell *Get(unsigned int codepoint, int gameAdvance, int phase = 0, int scale1024 = 1024,
+                         int verticalPhase = 0);
+    // Align a Latin run's cap-height centre to the CJK ideographic centre.
+    // The entire run shifts together, preserving descenders and superscripts.
+    int LatinCenterShiftQuarter(int scale1024 = 1024);
+    bool IsCJK(unsigned int cp) const { return UsesCJKFace(RenderCodepoint(cp)); }
     int KerningQuarter(unsigned int left, unsigned int right);
 
     int Lines() const { return m_lines; }
@@ -112,7 +119,7 @@ class GlyphSource
     // Cache misses run these stages with m_cs held. FreeType types stay
     // in glyph/Raster.h rather than leaking into the public interface.
     struct RasterContext;
-    bool Rasterize(unsigned int codepoint, int gameAdvance, int phase, int scale1024, unsigned long long key,
+    bool Rasterize(unsigned int codepoint, int gameAdvance, int phase, int scale1024, int verticalPhase, unsigned long long key,
                    GlyphCell &cell);
     void FitOutline(unsigned int codepoint, int gameAdvance, int phase, int scale1024, RasterContext &context,
                     GlyphCell &cell);
@@ -146,6 +153,9 @@ class GlyphSource
     void *m_highA = nullptr;
     void *m_highB = nullptr;
     bool m_highResolution = false;
+    int m_highScale = 2;
     bool m_legacy1252 = false;
+    bool m_centerReady = false;
+    double m_centerShift = 0;
 };
 } // namespace vt

@@ -27,6 +27,26 @@ bool MixedBoundary(unsigned int left, unsigned int right)
 {
     return (ChineseLetter(left) && LatinWord(right)) || (LatinWord(left) && ChineseLetter(right));
 }
+int MixedLatinShiftQ(const LineGlyph* items,int count,int scale1024)
+{
+    static const bool enabled=Cfg::ConfigBool("MixedScriptCenter",true);
+    if(!enabled) return 0;
+    bool chinese=false,latin=false;
+    for(int i=0;i<count;++i) {
+        if(items[i].bitmap) continue;
+        const auto cp=g_src.RenderCodepoint(items[i].cp);
+        chinese=chinese || ChineseLetter(cp);
+        latin=latin || LatinWord(cp);
+    }
+    return chinese && latin ? g_src.LatinCenterShiftQuarter(scale1024) : 0;
+}
+int LatinRasterY(unsigned int cp,int shiftQ,int* phase)
+{
+    if(g_src.IsCJK(cp)) shiftQ=0;
+    const int y=(int)floor((shiftQ+2)/4.0);
+    *phase=shiftQ-y*4;
+    return y;
+}
 bool NaturalGlyph(LineGlyph &item, unsigned int previous, const LineGlyph *prior, int &penQ, int scale1024,
                   int &mixedAddedQ)
 {
@@ -103,6 +123,7 @@ struct LineState
     void *buffer;
     unsigned int caller;
     int y, pitch, bounds[4], count, consumed, widthQ, originQ, boxWidth, mixedAddedQ, tightenedQ, scale1024;
+    int latinShiftQ;
     LineGlyph glyphs[kLineLimit];
 };
 // Only POD in static TLS: no loader-time allocation or constructors.
@@ -318,6 +339,7 @@ bool BeginLine(void *bitFont, const wchar_t *text, int count, int gameX, int y, 
     }
     t_line.originQ = (width > 0 ? boxX : gameX) * 4 + offsetQ;
     t_line.widthQ = widthQ;
+    t_line.latinShiftQ=MixedLatinShiftQ(t_line.glyphs,t_line.count,scale1024);
     // Warm every final phase before accepting the line. An unsupported
     // raster cannot fail halfway through a run already being painted.
     for (int j = 0; j < t_line.count; ++j)
@@ -328,7 +350,8 @@ bool BeginLine(void *bitFont, const wchar_t *text, int count, int gameX, int y, 
         const int q = t_line.originQ + item.penQ + item.shiftQ;
         int phase;
         LineRasterX(q, &phase);
-        if (!g_src.Get(item.cp, -1, phase, scale1024))
+        int verticalPhase=0;LatinRasterY(item.cp,t_line.latinShiftQ,&verticalPhase);
+        if (!g_src.Get(item.cp, -1, phase, scale1024,verticalPhase))
             return false;
     }
     t_line.active = true;
@@ -351,6 +374,7 @@ bool BeginLine(void *bitFont, const wchar_t *text, int count, int gameX, int y, 
 
 bool TryLineBlit(void *bitFont, unsigned int ch, int x, int y, int colorArg, unsigned int blitCaller, int *newX)
 {
+    g_src.SetHighResolutionScale(OutputRasterScale());
     if (!t_line.active || t_line.font != bitFont || t_line.caller != blitCaller)
         return false;
     const unsigned char *bf = (const unsigned char *)bitFont;
@@ -375,6 +399,8 @@ bool TryLineBlit(void *bitFont, unsigned int ch, int x, int y, int colorArg, uns
         const int drawX = item.bitmap ? (int)floor(q / 4.0) : LineRasterX(q, &phase);
         GlyphCell native;
         const GlyphCell *cell;
+        int verticalPhase=0;
+        const int drawY=y+(item.bitmap ? 0 : LatinRasterY(ch,t_line.latinShiftQ,&verticalPhase));
         if (item.bitmap)
         {
             memset(&native, 0, sizeof(native));
@@ -388,7 +414,7 @@ bool TryLineBlit(void *bitFont, unsigned int ch, int x, int y, int colorArg, uns
             cell = &native;
         }
         else
-            cell = g_src.Get(ch, -1, phase, t_line.scale1024);
+            cell = g_src.Get(ch, -1, phase, t_line.scale1024,verticalPhase);
         if (!cell)
         {
             t_line.active = false;
@@ -403,9 +429,9 @@ bool TryLineBlit(void *bitFont, unsigned int ch, int x, int y, int colorArg, uns
         const unsigned short color =
             colorArg == -1 ? *(const unsigned short *)(bf + BF_COLOR) : (unsigned short)colorArg;
         if (Cfg::AntiAlias())
-            DrawCellAA(target, *cell, drawX, y, g_src.Lines(), color, RGB565);
+            DrawCellAA(target, *cell, drawX, drawY, g_src.Lines(), color, RGB565);
         else
-            DrawCell(target, *cell, drawX, y, g_src.Lines(), color);
+            DrawCell(target, *cell, drawX, drawY, g_src.Lines(), color);
         ++g_drawn;
     }
     if (newX)

@@ -5,17 +5,18 @@
 // Sparse 2x glyph atlas, filter gutters and actual-viewport geometry.
 namespace vt::Presentation32::detail
 {
-bool AtlasShape(size_t count, int maxWidth, int maxHeight, int &width, int &height, int &columns)
+bool AtlasShape(size_t count, int maxWidth, int maxHeight, int &width, int &height, int &columns,int scale)
 {
+    const int cellW=34*scale,cellH=18*scale;
     width = 1024;
     while (width > maxWidth)
         width /= 2;
-    while (width >= AtlasCellW)
+    while (width >= cellW)
     {
-        columns = width / AtlasCellW;
+        columns = width / cellW;
         const size_t rows = (std::max<size_t>(1, count) + columns - 1) / columns;
         height = 1;
-        while ((size_t)height < rows * AtlasCellH && height <= maxHeight)
+        while ((size_t)height < rows * cellH && height <= maxHeight)
             height *= 2;
         if (height <= maxHeight)
             return true;
@@ -25,16 +26,17 @@ bool AtlasShape(size_t count, int maxWidth, int maxHeight, int &width, int &heig
     }
     return false;
 }
-void PackOverlay(const PixelPlane &plane, const std::vector<PixelRect> &tiles, uint32_t *output, int pitch, int columns)
+void PackOverlay(const PixelPlane &plane, const std::vector<PixelRect> &tiles, uint32_t *output, int pitch, int columns,int scale)
 {
+    const int cellW=34*scale,cellH=18*scale;
     for (size_t i = 0; i < tiles.size(); ++i)
     {
-        const int x = (int)(i % columns) * AtlasCellW, y = (int)(i / columns) * AtlasCellH;
+        const int x = (int)(i % columns) * cellW, y = (int)(i / columns) * cellH;
         auto *pixels = output + (size_t)y * pitch + x;
-        for (int row = 0; row < AtlasCellH; ++row)
-            memset(pixels + (size_t)row * pitch, 0, AtlasCellW * 4);
+        for (int row = 0; row < cellH; ++row)
+            memset(pixels + (size_t)row * pitch, 0, cellW * 4);
         const auto r = tiles[i];
-        plane.Overlay2Rect(pixels, pitch, {r.left - 1, r.top - 1, r.right + 1, r.bottom + 1});
+        plane.OverlayRect(pixels, pitch, {r.left - 1, r.top - 1, r.right + 1, r.bottom + 1},scale);
     }
 }
 bool OutputScale(const Texture &t, const ScreenVertex (&vertices)[4], float &sx, float &sy)
@@ -46,18 +48,21 @@ bool OutputScale(const Texture &t, const ScreenVertex (&vertices)[4], float &sx,
     const float sourceH = (vertices[0].v - vertices[1].v) * t.height;
     sx = sourceW > 0 ? (vertices[2].x - vertices[0].x) / sourceW : 0;
     sy = sourceH > 0 ? (vertices[0].y - vertices[1].y) / sourceH : 0;
-    return std::isfinite(sx) && std::isfinite(sy) && sx > 1.001f && sy > 1.001f &&
-           fabs(sx - sy) <= 0.001f * std::max(sx, sy);
+    // Original menus/movies often stretch 800x600 to a widescreen monitor.
+    // AtlasVertices already projects each axis independently; this is still
+    // a valid HiDPI target, even though its two scale factors differ.
+    return std::isfinite(sx) && std::isfinite(sy) && sx > 1.001f && sy > 1.001f;
 }
 bool ResizeAtlas(Texture &t, size_t count)
 {
-    if (t.overlay && count <= (size_t)t.atlasColumns * (t.atlasHeight / AtlasCellH))
+    const int cellH=18*t.rasterScale;
+    if (t.overlay && count <= (size_t)t.atlasColumns * (t.atlasHeight / cellH))
         return true;
     D3DCAPS9 caps{};
     if (!t.device || FAILED(t.device->GetDeviceCaps(&caps)))
         return false;
     int columns = 0, height = 0, width = 0;
-    if (!AtlasShape(count, caps.MaxTextureWidth, caps.MaxTextureHeight, width, height, columns))
+    if (!AtlasShape(count, caps.MaxTextureWidth, caps.MaxTextureHeight, width, height, columns,t.rasterScale))
         return false;
     if (t.overlay && columns == t.atlasColumns && height <= t.atlasHeight)
         return true;
@@ -80,8 +85,16 @@ bool UploadOverlay(Texture &t, const PixelPlane &plane)
     auto tiles = plane.TextTiles(true);
     if (tiles.empty())
     {
+        // Empty planes have the default density, not a new glyph density.
+        // Hide the draw list while retaining the atlas across caption gaps.
         t.overlayTiles.clear();
         return true;
+    }
+    if(t.rasterScale != plane.RasterScale()) {
+        if(t.overlay) { t.overlay->Release();t.overlay=nullptr; }
+        t.overlayTiles.clear();
+        t.rasterScale=plane.RasterScale();
+        Log::Note("Present32: atlas raster=%d (independent outline samples)",t.rasterScale);
     }
     if (!ResizeAtlas(t, tiles.size()))
         return false;
@@ -90,10 +103,10 @@ bool UploadOverlay(Texture &t, const PixelPlane &plane)
         return false;
     // Repack live tiles into a compact atlas. The draw list references only
     // this upload's cells, so abandoned cells never leave visible trails.
-    PackOverlay(plane, tiles, (uint32_t *)lock.pBits, lock.Pitch / 4, t.atlasColumns);
+    PackOverlay(plane, tiles, (uint32_t *)lock.pBits, lock.Pitch / 4, t.atlasColumns,t.rasterScale);
     if (FAILED(t.overlay->UnlockRect(0)))
         return false;
-    RECT dirty{0, 0, t.atlasWidth, (LONG)((tiles.size() + t.atlasColumns - 1) / t.atlasColumns) * AtlasCellH};
+    RECT dirty{0, 0, t.atlasWidth, (LONG)((tiles.size() + t.atlasColumns - 1) / t.atlasColumns) * 18*t.rasterScale};
     if (FAILED(t.overlay->AddDirtyRect(&dirty)))
         return false;
     t.overlayTiles = std::move(tiles);
@@ -113,12 +126,13 @@ void AtlasVertices(Texture &t, const ScreenVertex (&quad)[4], float sx, float sy
         const float right = std::min((float)r.right, sr), bottom = std::min((float)r.bottom, sb);
         if (l >= right || top >= bottom)
             continue;
-        const int ax = (int)(i % t.atlasColumns) * AtlasCellW + AtlasPad;
-        const int ay = (int)(i / t.atlasColumns) * AtlasCellH + AtlasPad;
+        const int n=t.rasterScale;
+        const int ax = (int)(i % t.atlasColumns) * 34*n + n;
+        const int ay = (int)(i / t.atlasColumns) * 18*n + n;
         const float x0 = quad[1].x + (l - sl) * sx, x1 = quad[1].x + (right - sl) * sx;
         const float y0 = quad[1].y + (top - st) * sy, y1 = quad[1].y + (bottom - st) * sy;
-        const float u0 = (ax + (l - r.left) * 2) / t.atlasWidth, u1 = (ax + (right - r.left) * 2) / t.atlasWidth;
-        const float v0 = (ay + (top - r.top) * 2) / t.atlasHeight, v1 = (ay + (bottom - r.top) * 2) / t.atlasHeight;
+        const float u0 = (ax + (l - r.left) * n) / t.atlasWidth, u1 = (ax + (right - r.left) * n) / t.atlasWidth;
+        const float v0 = (ay + (top - r.top) * n) / t.atlasHeight, v1 = (ay + (bottom - r.top) * n) / t.atlasHeight;
         const ScreenVertex a{x0, y0, 0, 1, u0, v0}, b{x1, y0, 0, 1, u1, v0}, c{x0, y1, 0, 1, u0, v1},
             d{x1, y1, 0, 1, u1, v1};
         t.overlayVertices.insert(t.overlayVertices.end(), {a, b, c, b, d, c});

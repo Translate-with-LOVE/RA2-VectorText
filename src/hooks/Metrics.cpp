@@ -23,6 +23,11 @@ void CaptureDynamicMeasurement(REGISTERS *R)
                                           t_background.align, &t_background.ink) &&
             t_background.ink.lines == 1;
     const bool loading = caller == 0x00553199u || caller == 0x005531EFu;
+    // Startup computes each copyright row's X = screen width - measured
+    // width - 10. It then prints with left alignment, so the old bitmap
+    // measurement must be replaced before that anchor is calculated.
+    const bool startup = caller == 0x00433EE6u &&
+        (R->Stack32(0x14)==0x00531459u || R->Stack32(0x14)==0x005314B3u);
     const bool message = caller == 0x00433EE6u && R->Stack32(0x14) == 0x00623A81u;
     if (message)
         t_message = {};
@@ -32,12 +37,17 @@ void CaptureDynamicMeasurement(REGISTERS *R)
     if (tooltip)
         t_tooltip = {};
     int *output = (int *)(uintptr_t)R->Stack32(8);
-    if ((!loading && !message && !tooltip) || !RangeOk(output, sizeof(int)))
+    if ((!loading && !message && !tooltip && !startup) || !RangeOk(output, sizeof(int)))
         return;
     int measured = 0;
     if (vt::Takeover::MeasureDynamicWidth((void *)(uintptr_t)R->ECX(), (const wchar_t *)(uintptr_t)R->Stack32(4),
                                           (int)R->Stack32(0x10), &measured))
     {
+        if(startup) {
+            int padding=vt::Cfg::ConfigInt("LineWidthPadding",4);
+            padding=padding<1 ? 1 : padding>32 ? 32 : padding;
+            measured-=padding; // copyright has no background box to pad
+        }
         t_measurement = {R->ESP(),
                          caller,
                          output,
@@ -47,6 +57,7 @@ void CaptureDynamicMeasurement(REGISTERS *R)
                          message,
                          (void *)(uintptr_t)R->ECX(),
                          (const wchar_t *)(uintptr_t)R->Stack32(4)};
+        t_measurement.startup=startup;
         if (tooltip)
         {
             t_measurement.height = (int *)(uintptr_t)R->Stack32(0xC);
@@ -144,6 +155,7 @@ VT_DEFINE_HOOK(yra::BitFont_DimensionDone, VT_Hook_BitFont_DimensionDone, yra::B
                     vt::Log::Note("DYNAMIC width: %s old=%d new=%d caller=0x%08X",
                                   pending.loading   ? "loading"
                                   : pending.tooltip ? "tooltip"
+                                  : pending.startup ? "startup copyright"
                                                     : "message",
                                   original, *pending.output, pending.caller);
             }

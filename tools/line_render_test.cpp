@@ -7,6 +7,8 @@
 #include "SyringeABI.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_OUTLINE_H
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
@@ -34,6 +36,11 @@ static int LegacyWidth(const wchar_t* text)
 }
 static void Clear() { memset(pixels, 0, sizeof(pixels)); vt::Takeover::EndLine(NULL); }
 static int Lit() { int n = 0; for (unsigned short p : pixels) if (p) ++n; return n; }
+static std::vector<int> recordedY;
+static int RecordPlacement(const vt::Target&,const vt::GlyphCell&,int,int y,int,unsigned short,bool)
+{
+    recordedY.push_back(y);return 0;
+}
 static void Draw(const wchar_t* s, int x, int y, int limit = 2048, int color = -1)
 {
     for (int i = 0; s[i] && i < limit; ++i)
@@ -122,6 +129,34 @@ int main(int argc, char** argv)
     char latinPath[MAX_PATH] = {};
     vt::Cfg::ConfigStr("FontFileLatin", "", latinPath, sizeof(latinPath));
     if (latinPath[0]) verticalReference.SetLatinFont(latinPath);
+    // Reference outline centres choose one shared Latin baseline. The actual
+    // row must shift letters, descenders and symbols together, without moving
+    // Chinese or applying this adjustment to a single-script row.
+    double centres[2]{};
+    const unsigned int centreCp[2]={'H',0x56FD};
+    for(int i=0;i<2;++i) {
+        auto face=(FT_Face)verticalReference.FaceHandleFor(centreCp[i]);
+        FT_Set_Transform(face,NULL,NULL);
+        CHECK(!FT_Load_Char(face,centreCp[i],FT_LOAD_NO_HINTING|FT_LOAD_NO_BITMAP),"baseline reference outline loads");
+        FT_BBox box{};FT_Outline_Get_CBox(&face->glyph->outline,&box);
+        centres[i]=(box.yMin+box.yMax)/(128.0*vt::Cfg::Supersample());
+    }
+    const int shiftQ=vt::Cfg::ConfigBool("MixedScriptCenter",true) ? (int)floor((centres[0]-centres[1])*4+0.5) : 0;
+    const int latinY=12+(int)floor((shiftQ+2)/4.0);
+    vt::SetPresentationWriter(RecordPlacement);
+    const wchar_t* baselineRows[]={L"HgTM%中文",L"HgTM%",L"中文",L"HgTM\x0099中文"};
+    for(int r=0;r<4;++r) {
+        if(r==3 && !vt::Cfg::LegacyCodepage1252()) continue;
+        recordedY.clear();Clear();
+        CHECK(vt::Takeover::BeginLine(font,baselineRows[r],-1,20,12,20,0,0,Caller),"baseline row prepared");
+        Draw(baselineRows[r],20,12);
+        CHECK(recordedY.size()==wcslen(baselineRows[r]),"every baseline glyph reaches writer");
+        for(size_t i=0;i<recordedY.size();++i)
+            CHECK(recordedY[i]==((r==0 || r==3) && i<5 ? latinY : 12),
+                "Latin run shares one baseline including symbols; Chinese and single-script rows keep engine Y");
+    }
+    vt::SetPresentationWriter(NULL);
+    Clear();vt::Takeover::BeginLine(font,text,-1,20,12,20,0,0,Caller);Draw(text,20,12);
     int firstRow = H, lastRow = -1;
     const int ss = vt::Cfg::Supersample();
     const int hint = vt::Cfg::ConfigInt("Hinting", 0);
@@ -450,6 +485,24 @@ int main(int argc, char** argv)
             CHECK(finishMeasurement((const wchar_t*)1) == 0 && result == 190, "invalid string falls back without changing output");
             result = 190; stack[8] = 0x5531EF; stack[12] = 400;
             CHECK(finishMeasurement(objectives) == 0 && result == expectedObjectives, "second loading box measurement also survives argument mutation");
+            const wchar_t* startupRows[] = {L"© 2000, 2001 美国艺电公司 保留所有权利",L"WESTWOOD STUDIOS\x0099 是美国艺电\x0099的一个品牌"};
+            const DWORD startupParents[] = {0x531459,0x5314B3};
+            for(int row=0;row<2;++row) {
+                stack[8]=0x433EE6;stack[13]=startupParents[row];stack[12]=0;
+                int natural=0;vt::Takeover::MeasureDynamicWidth(font,startupRows[row],0,&natural);
+                int padding=vt::Cfg::ConfigInt("LineWidthPadding",4);padding=padding<1 ? 1 : padding>32 ? 32 : padding;
+                result=LegacyWidth(startupRows[row]);
+                CHECK(finishMeasurement(startupRows[row])==0 && result==natural-padding,
+                    "startup copyright anchor uses natural width without UI box padding");
+                const int startupX=W-10-result;
+                Clear();
+                CHECK(vt::Takeover::BeginStringLine(font,startupRows[row],-1,startupX,12),
+                    "naturally measured startup row prepares without per-character fallback");
+                vt::Takeover::LineInfo startupInfo{};
+                CHECK(vt::Takeover::GetLineInfo(&startupInfo) && startupInfo.scale1024==1024 && !startupInfo.tightenedQ,
+                    "startup copyright preserves consistent glyph sizes and spacing");
+                vt::Takeover::EndLine(font);
+            }
             stack[9] = (DWORD)objectives; r.ecx = (DWORD)font; r.esp = (DWORD)(stack + 8);
             dimensionsEntry(&r); result = 190; stack[9] = 190;
             r.esp = (DWORD)(stack + 1);
@@ -480,6 +533,62 @@ int main(int argc, char** argv)
             r.eax = 0; CHECK(blit(&r) != 0 && r.eax == (DWORD)(20 + Advance('A')), "per-glyph fallback after unlock preserves native tracking");
         }
         Hook core = (Hook)GetProcAddress(dll, entries[0]);
+        Hook subtitleEntry = (Hook)GetProcAddress(dll, "VT_Hook_BitText_DrawText");
+        Hook subtitleDone = (Hook)GetProcAddress(dll, "VT_Hook_Subtitle_DrawDone");
+        CHECK(subtitleEntry && subtitleDone, "subtitle erase hooks exported");
+        if (subtitleEntry && subtitleDone && blit && unlock && core)
+        {
+            // Replay changing movie subtitle colours. The native 16px erase
+            // box misses vector descenders; the installed hook must erase all
+            // painted pixels before the next caption, without moving its text.
+            const wchar_t* caption = L"我相信可以用它将部队送回之前的时间，jg";
+            DWORD drawStack[32] = {};
+            DWORD* draw = drawStack;
+            draw[0] = 0x6C9E7D; draw[1] = (DWORD)font; draw[3] = (DWORD)caption;
+            const int nativeWidth = LegacyWidth(caption);
+            bool reproduced = false;
+            for (unsigned short color : {(unsigned short)0xFFE0, (unsigned short)0x07E0, (unsigned short)0x001F})
+            {
+                Clear(); *(unsigned short*)(font + 36) = color;
+                REGISTERS r = {}; r.esp = (DWORD)draw;
+                subtitleEntry(&r);
+                DWORD coreStack[6] = {0x434BCF, (DWORD)caption, 20, 12, 0, 0};
+                r.ecx = (DWORD)font; r.esp = (DWORD)coreStack; core(&r);
+                int oldX = 20;
+                for (const wchar_t* p = caption; *p; ++p)
+                {
+                    DWORD call[5] = {Caller, (DWORD)*p, (DWORD)oldX, 12, (DWORD)-1};
+                    r.esp = (DWORD)call;
+                    CHECK(blit(&r) != 0, "movie caption glyph rendered by DLL"); oldX = (int)r.eax;
+                }
+                unlock(&r);
+                bool missed = false;
+                for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+                    if (pixels[y*W+x] && (x < 20 || x >= 20+nativeWidth || y < 12 || y >= 28)) missed = true;
+                reproduced = reproduced || missed;
+                // The caller's frame begins after RET 28h (return + 10 args).
+                DWORD* done = draw + 11;
+                done[4] = 20; done[5] = nativeWidth; done[9] = 16;
+                r.esp = (DWORD)done; r.edi = 12; r.eax = 0xDEADBEEF; r.ebp = 0x12345678;
+                CHECK(subtitleDone(&r) == 0 && r.eax == 0xDEADBEEF && r.ebp == 0x12345678 && r.esp == (DWORD)done,
+                      "subtitle completion preserves native registers and stack");
+                bool contained = true;
+                for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x)
+                    if (pixels[y*W+x] && (x < (int)done[4] || x >= (int)(done[4]+done[5]) ||
+                                         y < (int)r.edi || y >= (int)(r.edi+done[9]))) contained = false;
+                CHECK(contained, "expanded subtitle erase rectangle contains every painted pixel");
+                for (int y = (int)r.edi; y < (int)(r.edi+done[9]); ++y)
+                    for (int x = (int)done[4]; x < (int)(done[4]+done[5]); ++x)
+                        if (x >= 0 && x < W && y >= 0 && y < H) pixels[y*W+x] = 0;
+                CHECK(Lit() == 0, "changing yellow/green/blue captions leaves no old comma or stroke");
+                done[4] = 20; done[5] = nativeWidth; done[9] = 16; r.edi = 12;
+                subtitleDone(&r);
+                CHECK(done[4] == 20 && done[5] == (DWORD)nativeWidth && done[9] == 16 && r.edi == 12,
+                      "subtitle capture consumed once");
+            }
+            CHECK(reproduced, "native subtitle erase box reproduces the coloured remnants");
+            *(unsigned short*)(font + 36) = 0x07FF;
+        }
         if (blit && unlock && core)
         {
             const int failuresBefore = failures;

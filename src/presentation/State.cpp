@@ -68,7 +68,11 @@ int Draw(const Target &t, const GlyphCell &cell, int x, int y, int rows, unsigne
         return -1;
     const auto start = Stamp();
     found->second->plane.Paint(cell, x, y, rows, color, {t.clipL, t.clipT, t.clipR + 1, t.clipB + 1},
-                               found->second->base, found->second->pitch);
+                               found->second->base, found->second->pitch, SubtitleOutlineActive());
+    static LONG reported=0;
+    const LONG density=cell.raster2 ? cell.raster2->scale : 1;
+    if(InterlockedExchange(&reported,density)!=density)
+        Log::Note("Present32: glyph retained raster=%ld base=%p pitch=%d position=(%d,%d)",density,t.base,t.pitch,x,y);
     state->stats.glyphMs += Elapsed(start);
     ++state->stats.glyphs;
     return 1;

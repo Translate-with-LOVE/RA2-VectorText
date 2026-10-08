@@ -96,6 +96,7 @@ bool Init()
     g_src.SetSupersample(Cfg::Supersample());
     g_src.SetHinting(Cfg::ConfigInt("Hinting", 0));
     g_src.SetHighResolution(Cfg::ConfigBool("Present32", true) && Cfg::HiDPI());
+    g_src.SetHighResolutionScale(OutputRasterScale());
     SetCoverageGamma(Cfg::Gamma());
     SetLinearBlend(Cfg::LinearBlend());
     SetDither(Cfg::Dither());
@@ -128,6 +129,7 @@ bool Init()
 
 bool TryBlit(void *bitFont, unsigned int ch, int x, int y, int colorArg, int *newX, unsigned int caller)
 {
+    g_src.SetHighResolutionScale(OutputRasterScale());
     // Ensure the fallback font is ready. Line preparation and measurement
     // also call the same idempotent Init().
     if (!g_tried)

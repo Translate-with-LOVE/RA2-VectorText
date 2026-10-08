@@ -106,7 +106,12 @@ def check_native_raster(path):
               read(0x411650, 6) == bytes.fromhex('56 8B F1 8D 4E 14'))
     print('native BSurface lifetime: 0x411650 vtable/prefix %s' %
           ('OK' if cpu_ok else 'DIFFER -- CPU text retains RGB565'))
-    return ok and cpu_ok
+    subtitle_ok = (read(0x6C9E78, 10) == bytes.fromhex('E8 53 AE D6 FF 8B D5 83 C3 24') and
+                   read(0x6C9E93, 32) == bytes.fromhex(
+                       '8B 44 24 10 8B 4A 0C 8B 54 24 0C 89 4B 0C 8B 4C 24 20 '
+                       '89 55 00 89 7D 04 89 45 08 89 4D 0C 5D 5B'))
+    print('native subtitle erase: 0x6C9E7D return/locals/registers %s' % ('OK' if subtitle_ok else 'DIFFER'))
+    return ok and cpu_ok and subtitle_ok
 
 
 def check_phobos_overlap(path, records):

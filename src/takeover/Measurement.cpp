@@ -119,12 +119,15 @@ bool MeasureTextInkY(void *bitFont, const wchar_t *text, int anchorX, int align,
                 originQ -= (widthQ + 1) / 2;
             else if (align & 2)
                 originQ -= widthQ;
+            const int latinShiftQ=MixedLatinShiftQ(items.data(),(int)items.size(),1024);
             for (const LineGlyph &item : items)
             {
                 int phase = 0;
                 const int q = originQ + item.penQ + item.shiftQ;
                 const int pixelX = item.bitmap ? (int)floor(q / 4.0) : LineRasterX(q, &phase);
-                const GlyphCell *cell = item.bitmap ? NULL : g_src.Get(item.cp, -1, phase);
+                int verticalPhase=0;
+                const int verticalY=item.bitmap ? 0 : LatinRasterY(item.cp,latinShiftQ,&verticalPhase);
+                const GlyphCell *cell = item.bitmap ? NULL : g_src.Get(item.cp, -1, phase,1024,verticalPhase);
                 if (!item.bitmap && !cell)
                     return false;
                 const int rows = item.bitmap ? g_src.Lines() : cell->inkRows;
@@ -145,7 +148,7 @@ bool MeasureTextInkY(void *bitFont, const wchar_t *text, int anchorX, int align,
                             inkLeft = litX;
                         if (litX + 1 > inkRight)
                             inkRight = litX + 1;
-                        const int pixelY = rowY + row + (cell ? cell->inkY : 0);
+                        const int pixelY = rowY + verticalY + row + (cell ? cell->inkY : 0);
                         if (pixelY < inkTop)
                             inkTop = pixelY;
                         if (pixelY + 1 > inkBottom)

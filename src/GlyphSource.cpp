@@ -28,11 +28,12 @@ void GlyphSource::ClearCache()
 {
     m_cache.clear();
     m_highCache.clear();
+    m_centerReady = false;
     CloseFace(&m_highA);
     CloseFace(&m_highB);
 }
 
-const GlyphCell *GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024)
+const GlyphCell *GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024, int verticalPhase)
 {
     codepoint = RenderCodepoint(codepoint);
     if (!m_faceA)
@@ -47,13 +48,16 @@ const GlyphCell *GlyphSource::Get(unsigned int codepoint, int gameAdvance, int p
         phase = -3;
     if (phase > 3)
         phase = 3;
+    if (verticalPhase < -3) verticalPhase = -3;
+    if (verticalPhase > 3) verticalPhase = 3;
 
     // Cache key includes codepoint, clamped compatibility advance (0 means
     // natural), signed raster phase and uniform row scale. Each variant
     // needs its own coverage; font/raster setting changes clear the cache.
     const int advKey = (gameAdvance > 0) ? (gameAdvance > 255 ? 255 : gameAdvance) : 0;
     const unsigned long long key = (unsigned long long)codepoint | ((unsigned long long)advKey << 32) |
-                                   ((unsigned long long)(phase + 3) << 40) | ((unsigned long long)scale1024 << 44);
+                                   ((unsigned long long)(phase + 3) << 40) | ((unsigned long long)scale1024 << 44) |
+                                   ((unsigned long long)(verticalPhase + 3) << 55);
 
     EnterCriticalSection(&m_cs);
     std::map<unsigned long long, GlyphCell>::iterator it = m_cache.find(key);
@@ -84,7 +88,7 @@ const GlyphCell *GlyphSource::Get(unsigned int codepoint, int gameAdvance, int p
             ClearCache();
 
         GlyphCell cell;
-        if (!Rasterize(codepoint, gameAdvance, phase, scale1024, key, cell))
+        if (!Rasterize(codepoint, gameAdvance, phase, scale1024, verticalPhase, key, cell))
         {
             LeaveCriticalSection(&m_cs);
             return NULL;

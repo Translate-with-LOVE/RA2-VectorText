@@ -8,6 +8,7 @@
 #include "Logger.h"
 #include "PixelPlane.h"
 #include <ddraw.h>
+#include <d3d9.h>
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
@@ -58,15 +59,34 @@ static HRESULT WINAPI OfflineDesc(void* object,DDSURFACEDESC2* d) {
     return S_OK;
 }
 static bool __fastcall OfflineCopy(void* dest,const int* dr,void* source,const int* sr,
-                                  void*,int,int,int,int) {
+                                  void* copier,int,int,int,int) {
     auto* d=*(OfflineDDS**)((char*)dest+0x1C);
     const auto* pixels=*(unsigned short**)((char*)source+0x14);
     const int width=((int*)source)[1];
-    for(int y=0;y<dr[3];++y) for(int x=0;x<dr[2];++x)
-        d->pixels[(dr[1]+y)*d->width+dr[0]+x]=pixels[(sr[1]+y)*width+sr[0]+x];
+    for(int y=0;y<dr[3];++y) for(int x=0;x<dr[2];++x) {
+        const auto pixel=pixels[(sr[1]+y)*width+sr[0]+x];
+        if(*(uintptr_t*)copier==0x7F7BC4 || pixel)
+            d->pixels[(dr[1]+y)*d->width+dr[0]+x]=pixel;
+    }
     return true;
 }
 static bool __fastcall FailedCopy(void*,const int*,void*,const int*,void*,int,int,int,int) { return false; }
+struct OfflineTexture { void** table; unsigned int pixels[32*24]{}; };
+static HRESULT WINAPI OfflineTextureLock(void* object,UINT,D3DLOCKED_RECT* out,const RECT*,DWORD) {
+    out->pBits=((OfflineTexture*)object)->pixels;out->Pitch=32*4;return S_OK;
+}
+static HRESULT WINAPI OfflineTextureUnlock(void*,UINT) { return S_OK; }
+static unsigned short unlockExpected=0;
+static bool unlockObserved=false;
+static HRESULT WINAPI OfflineSurfaceUnlock(void* object,void*) {
+    const auto& d=*(OfflineDDS*)object;
+    unlockObserved=d.pixels[4*d.width+4]==unlockExpected;
+    return S_OK;
+}
+static bool __fastcall OfflineCopyAndUnlock(void* dest,const int* dr,void* source,const int* sr,
+                                          void* copier,int a,int b,int c,int e) {
+    return OfflineCopy(dest,dr,source,sr,copier,a,b,c,e) && vt::Presentation32::TestSurfaceUnlock(dest);
+}
 static void GameSurface(unsigned char* memory,void** table,LPDIRECTDRAWSURFACE surface) {
     table[33]=(void*)0x4C1AB0;
     *(void***)memory=table;
@@ -128,49 +148,125 @@ static double AtlasSample(const vt::Presentation32::TestOverlay& frame,int x,int
     return 0;
 }
 int main(int argc,char** argv) {
+    if(argc>1 && !strcmp(argv[1],"--movie-frames")) {
+        vt::Presentation32::TestCpuTextStart();
+        unsigned char cache[0x24]{},screen[0x24]{};void* cacheTable[34]{},*screenTable[34]{},*ddsTable[34]{},*textureTable[21]{};
+        unsigned short cachePixels[32*24]{},screenPixels[32*24]{};
+        cacheTable[29]=(void*)CpuPitch;*(void***)cache=cacheTable;
+        ((int*)cache)[1]=32;((int*)cache)[2]=24;((int*)cache)[4]=2;*(void**)(cache+0x14)=cachePixels;
+        ddsTable[22]=(void*)OfflineDesc;OfflineDDS dds{ddsTable,screenPixels,32,24};
+        screenTable[33]=(void*)0x4C1AB0;*(void***)screen=screenTable;*(void**)(screen+0x1C)=&dds;
+        textureTable[19]=(void*)OfflineTextureLock;textureTable[20]=(void*)OfflineTextureUnlock;
+        OfflineTexture texture{textureTable};
+        vt::GlyphRaster2 hi;hi.scale=5;hi.width=hi.rows=5;hi.coverage.assign(25,255);
+        vt::GlyphCell glyph{};glyph.inkRows=1;glyph.cov[0]=128;glyph.raster2=&hi;
+        vt::Target target{cachePixels,32,0,0,31,23};
+        vt::Presentation32::TestCpuTextTrack(cache);vt::BeginTextInkCapture(true);
+        vt::DrawCellAA(target,glyph,4,4,1,0xFFE0,vt::RGB565);vt::TextInkRect dirty{};vt::EndTextInkCapture(&dirty);
+        const int rect[]{0,0,32,24};uintptr_t keyed=0x7F7BF4;
+        bool stable=true,isolated=true,erased=true;
+        for(int frame=0;frame<120;++frame) {
+            const unsigned short scene=(frame&1) ? 0xFFFF : 0;
+            std::fill(std::begin(screenPixels),std::end(screenPixels),scene);
+            vt::Presentation32::TestGameCopy(screen,rect,cache,rect,&keyed,OfflineCopy);
+            vt::PlaneOptions options;options.highResolution=true;
+            vt::PixelPlane reference(32,24,options);unsigned short refNative[32*24]{};
+            std::fill(std::begin(refNative),std::end(refNative),scene);
+            reference.Paint(glyph,4,4,1,0xFFE0,{0,0,32,24},refNative,32,true);
+            const unsigned int expected=reference.Composite(4,4,refNative[4*32+4]);
+            void* upload=nullptr;int pitch=0;
+            if(!vt::Presentation32::TestFrameUploadBegin(screen,&texture,&upload,&pitch)) return 2;
+            for(int y=0;y<24;++y) memcpy((char*)upload+y*pitch,screenPixels+y*32,32*2);
+            // Complete another movie frame while this texture still contains
+            // the previous frame's native pixels. This is a deterministic
+            // interleaving of the game and cnc-ddraw render threads.
+            std::fill(std::begin(screenPixels),std::end(screenPixels),(unsigned short)(scene ? 0 : 0xFFFF));
+            vt::Presentation32::TestGameCopy(screen,rect,cache,rect,&keyed,OfflineCopy);
+            unsigned int before[64*48]{},after[64*48]{};
+            vt::Presentation32::TestCpuTextOverlay(screen,before,64);
+            vt::Presentation32::TestFrameUploadEnd(&texture);
+            stable=stable && texture.pixels[4*32+4]==expected;
+            vt::Presentation32::TestCpuTextOverlay(screen,after,64);
+            isolated=isolated && !memcmp(before,after,sizeof(before));
+        }
+        Check(stable,"120 delayed movie uploads keep each frame's subtitle coverage and background together");
+        Check(isolated,"old render uploads never erase the next frame's live HiDPI subtitle");
+        ddsTable[32]=(void*)OfflineSurfaceUnlock;
+        unsigned short refNative[32*24]{};
+        std::fill(std::begin(refNative),std::end(refNative),(unsigned short)0xFFFF);
+        vt::PixelPlane reference(32,24,{});
+        reference.Paint(glyph,4,4,1,0xFFE0,{0,0,32,24},refNative,32,true);
+        unlockExpected=refNative[4*32+4];
+        std::fill(std::begin(screenPixels),std::end(screenPixels),(unsigned short)0xFFFF);
+        vt::Presentation32::TestGameCopy(screen,rect,cache,rect,&keyed,OfflineCopyAndUnlock);
+        Check(unlockObserved,"native subtitle markers finish before DDS Unlock wakes the renderer");
+        // A caption change after staging must not change that staged frame.
+        void* upload=nullptr;int pitch=0;
+        vt::Presentation32::TestFrameUploadBegin(screen,&texture,&upload,&pitch);
+        for(int y=0;y<24;++y) memcpy((char*)upload+y*pitch,screenPixels+y*32,32*2);
+        memset(cachePixels,0,sizeof(cachePixels));vt::Presentation32::TestCpuTextTrack(cache);
+        memset(screenPixels,0,sizeof(screenPixels));
+        unsigned int cleared[64*48]{};
+        vt::Presentation32::TestCpuTextOverlay(screen,cleared,64); // validate current erase
+        vt::Presentation32::TestFrameUploadEnd(&texture);
+        Check(texture.pixels[4*32+4]!=0xFF000000u,"caption end does not erase an already staged earlier frame");
+        vt::Presentation32::TestFrameUploadBegin(screen,&texture,&upload,&pitch);
+        memset(upload,0,32*24*2);vt::Presentation32::TestFrameUploadEnd(&texture);
+        for(auto pixel:texture.pixels) erased=erased && pixel==0xFF000000u;
+        Check(erased,"the next frame removes ended subtitles immediately without stale overlays");
+        vt::SetPresentationWriter(nullptr);
+        printf("Movie frames: %s\n",errors ? "FAIL" : "PASS");return errors ? 1 : 0;
+    }
     FILE* report=fopen("cnc-qa.txt","w");if(report)fclose(report);
     if(argc>1 && !strcmp(argv[1],"--fractional-offline")) {
         // Compare the actual packed atlas and output vertices against an
         // independent contiguous source image, including tile seams and tails.
+        for(int density : {2,5}) {
         vt::PlaneOptions options;options.highResolution=true;
         vt::PixelPlane plane(96,48,options);
-        vt::GlyphRaster2 raster;raster.width=2;raster.rows=2;raster.coverage={16,80,160,240};
+        vt::GlyphRaster2 raster;raster.scale=density;raster.width=raster.rows=density;
+        raster.coverage.resize(density*density);
+        for(int i=0;i<density*density;++i) raster.coverage[i]=(unsigned char)(16+i*224/(density*density-1));
         vt::GlyphCell glyph{};glyph.inkRows=1;glyph.cov[0]=128;glyph.raster2=&raster;
         for(const auto& p:std::vector<std::array<int,3>>{{0,0,0xFFFF},{31,15,0xF800},
                 {32,16,0x07E0},{63,31,0x001F},{64,32,0xFFFF},{95,47,0xFFFF},{48,23,0x07E0}})
             plane.Paint(glyph,p[0],p[1],1,(unsigned short)p[2],{0,0,96,48});
-        std::vector<unsigned int> full(192*96);
-        plane.Overlay2Rect(full.data(),192,{0,0,96,48});
-        for(float scale:{1.01f,1.25f,4.0f/3,1.5f,1.75f,2.0f,2.25f,2.5f,3.0f}) {
+        std::vector<unsigned int> full(96*48*density*density);
+        plane.OverlayRect(full.data(),96*density,{0,0,96,48},density);
+        for(const auto& scales:std::vector<std::array<float,2>>{{1.01f,1.01f},{1.25f,1.25f},
+                {4.0f/3,4.0f/3},{1.5f,1.5f},{1.75f,1.75f},{2,2},{2.25f,2.25f},{2.5f,2.5f},{3,3},
+                {1.5f,1.25f},{2.4f,1.8f},{4.8f,3.6f},{2,3}}) {
+            const float sx=scales[0],sy=scales[1];
             for(int cropped=0;cropped<2;++cropped) {
                 const vt::PixelRect source=cropped ? vt::PixelRect{9,4,87,44} : vt::PixelRect{0,0,96,48};
                 const float ox=cropped ? 37.25f : 0,oy=cropped ? 11.75f : 0;
                 vt::Presentation32::TestOverlay frame;
-                bool match=vt::Presentation32::TestBuildOverlay(plane,scale,scale,ox,oy,frame,&source);
+                bool match=vt::Presentation32::TestBuildOverlay(plane,sx,sy,ox,oy,frame,&source);
                 double largestError=0;
-                for(int y=(int)ceil(oy-0.5);y<oy+(source.bottom-source.top)*scale-0.5;++y)
-                    for(int x=(int)ceil(ox-0.5);x<ox+(source.right-source.left)*scale-0.5;++x)
+                for(int y=(int)ceil(oy-0.5);y<oy+(source.bottom-source.top)*sy-0.5;++y)
+                    for(int x=(int)ceil(ox-0.5);x<ox+(source.right-source.left)*sx-0.5;++x)
                         for(int channel=0;channel<4;++channel) {
-                            const double expected=SampleChannel(full,192,96,
-                                source.left*2+(x-ox+0.5)*2/scale-0.5,
-                                source.top*2+(y-oy+0.5)*2/scale-0.5,channel,frame.point);
+                            const double expected=SampleChannel(full,96*density,48*density,
+                                source.left*density+(x-ox+0.5)*density/sx-0.5,
+                                source.top*density+(y-oy+0.5)*density/sy-0.5,channel,frame.point);
                             const double actual=AtlasSample(frame,x,y,channel);
                             largestError=std::max(largestError,fabs(expected-actual));
                         }
                 match=match && largestError<0.01;
-                printf("fractional scale=%.4g cropped=%d max channel error=%.6f\n",scale,cropped,largestError);
+                printf("fractional scale=%.4gx%.4g raster=%d cropped=%d max channel error=%.6f\n",sx,sy,density,cropped,largestError);
                 Check(match,"packed atlas matches full-image sampling across tile seams and viewport offsets");
-                Check(frame.point==(scale==2.0f),"only exact 2x uses independent point samples");
+                Check(frame.point==(sx==density && sy==density),"point sampling requires exact raster density on both axes");
             }
         }
         vt::Presentation32::TestOverlay frame;
         Check(!vt::Presentation32::TestBuildOverlay(plane,1,1,0,0,frame),"native 1x retains the existing compositor");
-        Check(!vt::Presentation32::TestBuildOverlay(plane,1.5f,1.25f,0,0,frame),"nonuniform stretch retains existing fallback");
+        Check(!vt::Presentation32::TestBuildOverlay(plane,2,0.75f,0,0,frame),"downscaled axis retains existing fallback");
         Check(!vt::Presentation32::TestBuildOverlay(plane,std::numeric_limits<float>::infinity(),1.5f,0,0,frame),
             "nonfinite quad cannot allocate an overlay");
         plane.Clear({0,0,96,48});
         Check(vt::Presentation32::TestBuildOverlay(plane,1.5f,1.5f,0,0,frame) && frame.vertices.empty(),
             "erased text has no live draw cells or filter fringes");
+        }
         printf("fractional overlay: %s\n",errors?"FAIL":"PASS");return errors?1:0;
     }
     if(argc>1 && !strcmp(argv[1],"--cpu-text")) {
@@ -230,6 +326,45 @@ int main(int argc,char** argv) {
         vt::DrawCellAA(target,glyph,4,4,1,0xFFFF,vt::RGB565);
         vt::Presentation32::TestCpuTextOverlay(object,again,64);
         Check(!memcmp(first,again,sizeof(first)),"BSurface buffer change creates a fresh sidecar");
+        // The independent output-grid fringe can extend below the 1x raster.
+        // It must be included even when its logical coverage is zero.
+        memset(replacement,0,sizeof(replacement));
+        vt::Presentation32::TestCpuTextTrack(object);
+        glyph.cov[0]=0;hi.top=34;hi.left=-1;
+        vt::BeginTextInkCapture();
+        vt::DrawCellAA(target,glyph,4,0,1,0x07E0,vt::RGB565);
+        vt::TextInkRect dirty{};
+        Check(vt::EndTextInkCapture(&dirty) && dirty.left==3 && dirty.right==5 && dirty.top==17 && dirty.bottom==18,
+            "subtitle capture includes HiDPI-only descender and negative bearing");
+        for(int y=dirty.top;y<dirty.bottom;++y) for(int x=dirty.left;x<dirty.right;++x) replacement[y*32+x]=0;
+        vt::Presentation32::TestCpuTextOverlay(object,again,64);
+        clear=true;for(auto p:again) clear=clear && !p;
+        Check(clear,"expanded subtitle erase removes HiDPI-only coloured fragments");
+        Check(!vt::EndTextInkCapture(&dirty),"finished subtitle capture does not leak into another caption");
+        hi.top=hi.left=0;hi.coverage={255,255,255,255};glyph.cov[0]=255;
+        memset(replacement,0,sizeof(replacement));vt::Presentation32::TestCpuTextTrack(object);
+        vt::BeginTextInkCapture(true);
+        vt::DrawCellAA(target,glyph,4,4,1,0x001F,vt::RGB565);
+        Check(vt::EndTextInkCapture(&dirty) && dirty.left==3 && dirty.top==3 && dirty.right==6 && dirty.bottom==6,
+            "production CPU writer includes subtitle outline in erase bounds");
+        uintptr_t keyed=0x7F7BF4;
+        for(unsigned short scene : {static_cast<unsigned short>(0),static_cast<unsigned short>(0xFFFF),static_cast<unsigned short>(0)}) {
+            std::fill(std::begin(screenPixels),std::end(screenPixels),scene);
+            Check(vt::Presentation32::TestGameCopy(screen,rect,object,rect,&keyed,OfflineCopy),
+                "production native keyed copy transfers cached subtitle outline");
+            vt::Presentation32::TestCpuTextOverlay(screen,again,64);
+            Check(again[8*64+6]==0xFF000000u && again[8*64+7]==0xFFFFFFFFu && again[8*64+8]==0xFF0000FFu,
+                "production copy keeps white inner and black outer rims stable while retaining blue text");
+            Check(screenPixels[4*32+3]==(scene ? 0xFFFE : 0xFFFF),"production copy resolves observable native outline marker");
+            Check(!vt::Presentation32::TestGameCopy(screen,rect,object,rect,&opaque,FailedCopy),
+                "failed outlined subtitle copy returns failure");
+            vt::Presentation32::TestCpuTextOverlay(screen,first,64);
+            Check(!memcmp(first,again,sizeof(first)),"failed subtitle copy restores adaptive edge and background metadata");
+            std::fill(std::begin(screenPixels),std::end(screenPixels),scene);
+            vt::Presentation32::TestCpuTextOverlay(screen,again,64);
+            clear=true;for(auto p:again) clear=clear && !p;
+            Check(clear,"bright and dark movie frame restores erase outlined subtitles without residue");
+        }
         vt::Presentation32::TestCpuTextRelease(object);
         vt::SetPresentationWriter(nullptr);
         printf("CPU text: %s\n",errors?"FAIL":"PASS");return errors?1:0;
@@ -237,6 +372,7 @@ int main(int argc,char** argv) {
     const bool perf2=argc>1 && !strcmp(argv[1],"--perf-2x");
     const bool fractional=argc>2 && !strcmp(argv[1],"--fractional");
     const float requestedScale=fractional ? (float)atof(argv[2]) : 1;
+    const float requestedScaleY=fractional && argc>3 ? (float)atof(argv[3]) : requestedScale;
     const bool compat2=argc>1 && !strcmp(argv[1],"--compat-2x");
     const bool output2=argc>1 && (!strcmp(argv[1],"--2x") || compat2 || perf2);
     const bool fullscreen=argc>1 && !strcmp(argv[1],"--fullscreen");
@@ -268,7 +404,7 @@ int main(int argc,char** argv) {
     }
     WNDCLASSA wc{}; wc.lpfnWndProc=DefWindowProcA; wc.hInstance=GetModuleHandle(nullptr); wc.lpszClassName="VT32Test";
     RegisterClassA(&wc);
-    RECT desired{0,0,(LONG)(640*requestedScale),(LONG)(480*requestedScale)};
+    RECT desired{0,0,(LONG)(640*requestedScale),(LONG)(480*requestedScaleY)};
     AdjustWindowRect(&desired,WS_OVERLAPPEDWINDOW,FALSE);
     window=CreateWindowA(wc.lpszClassName,"VectorText presentation verification",WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT,CW_USEDEFAULT,fractional ? desired.right-desired.left : output2?1296:656,
@@ -296,7 +432,8 @@ int main(int argc,char** argv) {
     const bool expectFallback=argc>1 && !strcmp(argv[1],"--fallback");
     Check(expectFallback ? !stats.backend : stats.backend>0,"presentation activation");
     if(fractional) {
-        vt::GlyphRaster2 hi;hi.width=32;hi.rows=32;hi.coverage.assign(1024,192);
+        const int density=std::max(2,std::min(8,(int)ceil(std::max(requestedScale,requestedScaleY)-0.0001f)));
+        vt::GlyphRaster2 hi;hi.scale=density;hi.width=hi.rows=16*density;hi.coverage.assign(hi.width*hi.rows,192);
         vt::GlyphCell mark{};mark.inkRows=16;mark.raster2=&hi;
         for(int y=0;y<16;++y) for(int x=0;x<16;++x) mark.cov[y*24+x]=128;
         DDSURFACEDESC d{};d.dwSize=sizeof(d);primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
@@ -305,20 +442,86 @@ int main(int argc,char** argv) {
         primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(300);
         const bool enabled=vt::Cfg::HiDPI();
         const float actualScale=vt::Presentation32::TestObservedScale();
-        printf("requested fractional scale %.4g, observed %.4g\n",requestedScale,actualScale);
-        Check(enabled ? fabs(actualScale-requestedScale)<0.001f : actualScale==0,
+        const float actualScaleY=vt::Presentation32::TestObservedScale(true);
+        printf("requested scale %.4gx%.4g, observed %.4gx%.4g\n",requestedScale,requestedScaleY,actualScale,actualScaleY);
+        Check(enabled ? fabs(actualScale-requestedScale)<0.001f && fabs(actualScaleY-requestedScaleY)<0.001f
+                      : actualScale==0 && actualScaleY==0,
             "fractional scale follows actual cnc-ddraw quad and respects HiDPI switch");
+        Check(!enabled || (vt::OutputRasterScale()==density && vt::Presentation32::TestObservedRaster()==density),
+            "actual output density selects an independent raster and a matching GPU atlas");
         HDC dc=GetDC(window);
         const int ref=enabled ? 224 : 186;
-        const int actual=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScale)));
+        const int actual=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY)));
         printf("fractional tile-seam pixel=%d expected=%d\n",actual,ref);
         Check(abs(actual-ref)<=4,"fractional tile junction has continuous high-resolution coverage");
         ReleaseDC(window,dc);
         primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);
         dc=GetDC(window);
-        Check(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScale))==RGB(0,0,0),
+        Check(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY))==RGB(0,0,0),
             "fractional overlay and filter fringe disappear after text is erased");ReleaseDC(window,dc);
-        if(enabled && requestedScale==1.5f) for(float next:{1.75f,2.0f,1.0f,1.5f}) {
+        // Caption gaps reset an empty CPU plane to density 2. Both rotating
+        // upload textures must recover their high-resolution atlas afterwards,
+        // including a real density change between successive captions.
+        for(int captionDensity : {density,2,density}) {
+            hi.scale=captionDensity;hi.width=hi.rows=16*captionDensity;
+            hi.coverage.assign(hi.width*hi.rows,192);
+            primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
+            t.base=(unsigned short*)d.lpSurface;t.pitch=d.lPitch/2;
+            vt::DrawCellAA(t,mark,25,10,16,0xFFFF,vt::RGB565);
+            primary->Unlock(nullptr);Pump(300);
+            bool stable=true;
+            int minimum=255,maximum=0;
+            for(int frame=0;frame<8;++frame) {
+                primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
+                primary->Unlock(nullptr);Pump(80);
+                dc=GetDC(window);
+                const int pixel=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY)));
+                ReleaseDC(window,dc);
+                minimum=std::min(minimum,pixel);maximum=std::max(maximum,pixel);
+                stable=stable && abs(pixel-ref)<=4;
+            }
+            printf("returning caption raster=%d: screen range=%d..%d expected=%d\n",captionDensity,minimum,maximum,ref);
+            Check(stable,"returning captions retain high-resolution coverage on every rotating texture");
+            primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);
+            dc=GetDC(window);
+            Check(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY))==RGB(0,0,0),
+                "caption gaps hide retained atlas contents");ReleaseDC(window,dc);
+        }
+        if(enabled && requestedScale>=2.4f) {
+            hi.scale=density;hi.width=hi.rows=16*density;hi.coverage.assign(hi.width*hi.rows,255);
+            for(int yy=0;yy<16;++yy) for(int xx=0;xx<16;++xx) mark.cov[yy*24+xx]=255;
+            COLORREF rimOnBlack=0;int rimX=0;
+            for(unsigned short scene : {static_cast<unsigned short>(0),static_cast<unsigned short>(0xFFFF)}) {
+                DDBLTFX sceneFill{};sceneFill.dwSize=sizeof(sceneFill);sceneFill.dwFillColor=scene;
+                primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&sceneFill);Pump(100);
+                primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);
+                t.base=(unsigned short*)d.lpSurface;t.pitch=d.lPitch/2;
+                vt::BeginTextInkCapture(true);
+                vt::DrawCellAA(t,mark,25,10,16,0x001F,vt::RGB565);
+                vt::TextInkRect ink{};vt::EndTextInkCapture(&ink);
+                primary->Unlock(nullptr);Pump(300);
+                primary->Lock(nullptr,&d,DDLOCK_WAIT,nullptr);primary->Unlock(nullptr);Pump(120);
+                dc=GetDC(window);
+                const int sampleY=(int)ceil(16*requestedScaleY);
+                if(!scene) {
+                    const int boundary=(int)ceil(25*requestedScale);
+                    for(int xx=boundary-3;xx<boundary;++xx) {
+                        const COLORREF candidate=GetPixel(dc,xx,sampleY);
+                        if(GetRValue(candidate)>GetRValue(rimOnBlack)) {rimOnBlack=candidate;rimX=xx;}
+                    }
+                    Check(GetRValue(rimOnBlack)>130 && GetGValue(rimOnBlack)>130,
+                        "D3D9 dark caption has a visible white separating rim");
+                } else {
+                    const COLORREF rim=GetPixel(dc,rimX,sampleY);
+                    Check(rim==rimOnBlack,"D3D9 caption rim retains its color across black and white movie frames");
+                }
+                Check(GetPixel(dc,(int)ceil(32*requestedScale),sampleY)==RGB(0,0,255),
+                    "D3D9 stable subtitle rim preserves the blue body");
+                ReleaseDC(window,dc);
+            }
+            primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);
+        }
+        if(enabled && requestedScale==1.5f && requestedScaleY==requestedScale) for(float next:{1.75f,2.0f,1.0f,1.5f}) {
             RECT size{0,0,(LONG)(640*next),(LONG)(480*next)};
             AdjustWindowRect(&size,WS_OVERLAPPEDWINDOW,FALSE);
             RECT position{};GetWindowRect(window,&position);
