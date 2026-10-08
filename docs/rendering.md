@@ -20,7 +20,13 @@ Syringe hook 在 `Hooks.cpp` 和 `hooks/` 中读取原生参数，调用 `Takeov
 每个线程的行计划由布局模块持有，待消费的背景、tooltip 和宽度测量由 hook 测量模块持有。
 私有头文件只连接这些实现单元，不提供另一套渲染算法。
 
-字形经 `GlyphSource` 缓存后交给 `PixelWriter`。没有 32 位接管时写入 RGB565；接管时调用
+`GlyphSource.cpp` 管理缓存和访问锁；`glyph/Fonts.cpp` 管理 FreeType 库、字体与字号，
+`Settings.cpp` 处理栅格设置、旧码位映射、字体选择和 kerning。
+缓存未命中时，`Raster.cpp` 加载字形并串联 `Outline.cpp` 的轮廓调整与 `Coverage.cpp` 的位图生成。
+逻辑覆盖率和可选 2× 字形使用同一次轮廓调整结果，各自保留对应采样网格的 hinting。
+缓存及 FreeType face 仍由 `GlyphSource` 统一持有；栅格化各步骤在同一把锁内完成。
+
+字形经缓存后交给 `PixelWriter`。没有 32 位接管时写入 RGB565；接管时调用
 `presentation/State.cpp` 登记的 writer，向 `PixelPlane` 稀疏文字层记录覆盖率。
 `Surfaces.cpp` 跟踪 DirectDraw 表面和加载界面的 BSurface，负责复制、填充、清除与销毁时的文字层同步。
 加载界面的内存表面和游戏内显示表面保持各自的登记与复制路径。

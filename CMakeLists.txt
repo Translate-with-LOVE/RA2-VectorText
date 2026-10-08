@@ -46,7 +46,10 @@ target_compile_options(vt_minhook PRIVATE /W3)
 
 # This core is shared by the DLL and offline tests. Presentation callbacks are
 # supplied by each test where appropriate, so its own sources stay separate.
-add_library(vt_glyphs STATIC src/GlyphSource.cpp src/PixelWriter.cpp)
+add_library(vt_glyphs STATIC
+    src/GlyphSource.cpp src/glyph/Fonts.cpp src/glyph/Settings.cpp
+    src/glyph/Raster.cpp src/glyph/Outline.cpp src/glyph/Coverage.cpp
+    src/PixelWriter.cpp)
 target_include_directories(vt_glyphs PUBLIC src include)
 target_link_libraries(vt_glyphs PUBLIC vt_freetype)
 target_compile_options(vt_glyphs PRIVATE /W4)
