@@ -655,14 +655,84 @@ namespace vt
         return result;
     }
 
-    void PixelPlane::Overlay2Rect(uint32_t* output,int outputPitch,PixelRect rect) const
-    { OverlayRect(output,outputPitch,rect,2); }
+    void PixelPlane::CompositeScaledRect(uint32_t *output, int pitch, int width, int height, PixelRect source) const
+    {
+        if (!output || width <= 0 || height <= 0 || pitch < width || source.right <= source.left ||
+            source.bottom <= source.top)
+            return;
+        const double sx = width / (double)(source.right - source.left),
+                     sy = height / (double)(source.bottom - source.top);
+        const int n = RasterScale();
+        const auto &tables = Tables();
+        for (auto r : TextTiles(true))
+        {
+            const int l = std::max(0, (int)std::ceil((r.left - source.left) * sx - 0.5));
+            const int t = std::max(0, (int)std::ceil((r.top - source.top) * sy - 0.5));
+            const int right = std::min(width, (int)std::ceil((r.right - source.left) * sx - 0.5));
+            const int bottom = std::min(height, (int)std::ceil((r.bottom - source.top) * sy - 0.5));
+            if (l >= right || t >= bottom)
+                continue;
+            const int gw = (r.right - r.left + 2) * n, gh = (r.bottom - r.top + 2) * n;
+            std::vector<InkPixel> ink((size_t)gw * gh);
+            for (int y = r.top - 1; y <= r.bottom; ++y)
+                for (int x = r.left - 1; x <= r.right; ++x)
+                {
+                    if (x < 0 || y < 0 || x >= m_width || y >= m_height)
+                        continue;
+                    const auto found = m_tiles.find((y / TileH) * m_tilesX + x / TileW);
+                    if (found == m_tiles.end())
+                        continue;
+                    const auto &p = found->second.pixels[(y % TileH) * TileW + x % TileW];
+                    for (int yy = 0; yy < n; ++yy)
+                        for (int xx = 0; xx < n; ++xx)
+                            ink[(size_t)((y - r.top + 1) * n + yy) * gw + (x - r.left + 1) * n + xx] =
+                                Sample(p, xx, yy, n);
+                }
+            for (int y = t; y < bottom; ++y)
+                for (int x = l; x < right; ++x)
+                {
+                    const double u = (source.left + (x + 0.5) / sx - r.left + 1) * n - 0.5;
+                    const double v = (source.top + (y + 0.5) / sy - r.top + 1) * n - 0.5;
+                    const int ix = (int)std::floor(u), iy = (int)std::floor(v);
+                    const double fx = u - ix, fy = v - iy;
+                    const InkPixel samples[] = {ink[iy * gw + ix], ink[iy * gw + ix + 1], ink[(iy + 1) * gw + ix],
+                                                ink[(iy + 1) * gw + ix + 1]};
+                    const double weights[] = {(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy};
+                    double a = 0, channels[3]{};
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        a += weights[i] * samples[i].a;
+                        channels[0] += weights[i] * (samples[i].r + samples[i].lightEdge);
+                        channels[1] += weights[i] * (samples[i].g + samples[i].lightEdge);
+                        channels[2] += weights[i] * (samples[i].b + samples[i].lightEdge);
+                    }
+                    if (a <= 0)
+                        continue;
+                    auto &pixel = output[(size_t)y * pitch + x];
+                    uint32_t result = 0xFF000000u;
+                    for (int c = 0; c < 3; ++c)
+                    {
+                        const int shift = 16 - c * 8, bg = (pixel >> shift) & 255;
+                        const int background = m_options.linear ? tables.linear[bg] : bg * 257;
+                        const int value = std::max(
+                            0, std::min(65535, (int)std::lround(channels[c] + background * (1 - a / 65535.0))));
+                        result |= (uint32_t)(m_options.linear ? tables.srgb[value] : (value + 128) / 257) << shift;
+                    }
+                    pixel = result;
+                }
+        }
+    }
 
-    void PixelPlane::OverlayRect(uint32_t* output,int outputPitch,PixelRect rect,int scale) const
+    void PixelPlane::Overlay2Rect(uint32_t *output, int outputPitch, PixelRect rect) const
+    {
+        OverlayRect(output, outputPitch, rect, 2);
+    }
+
+    void PixelPlane::OverlayRect(uint32_t *output, int outputPitch, PixelRect rect, int scale) const
     {
         // Premultiplied channels. With linear blending, encode them as sRGB
         // for the D3D9 sRGB sampler; it recovers linear premultiplied values.
-        const auto* srgb=Tables().srgb;
+        const auto *srgb = Tables().srgb;
         auto channel=[&](int v) { return m_options.linear ? (int)srgb[v] : (v+128)/257; };
         const Tile* tile=nullptr;int tileKey=-1;
         const PlanePixel empty{};

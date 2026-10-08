@@ -136,4 +136,15 @@ void RecordFrame(const uint32_t *pixels, int width, int height, int pitch)
     (void)pitch;
 #endif
 }
+bool ObserveOutput(float sx, float sy, int raster)
+{
+    const bool scaled = state->autoTextScale && std::isfinite(sx) && std::isfinite(sy) && sx > 1.001f && sy > 1.001f;
+    Guard guard;
+    state->outputScaleX = scaled ? sx : 0;
+    state->outputScaleY = scaled ? sy : 0;
+    state->outputRaster = scaled ? raster : 0;
+    if (scaled)
+        SetOutputRasterScale((int)std::ceil(std::min(8.0f, std::max(sx, sy)) - 0.0001f));
+    return scaled;
+}
 } // namespace vt::Presentation32::detail

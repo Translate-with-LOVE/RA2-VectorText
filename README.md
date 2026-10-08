@@ -72,7 +72,7 @@ cmake --build --preset deploy
 所有参数放在游戏目录 `VectorText.ini` 的 `[VectorText]` 节下，修改后重启游戏生效。
 **默认值**表示代码在该项缺失时使用的值。完整配置文件见 [VectorText.ini](VectorText.ini)。
 布尔值不区分大小写，支持 `true/false`、`yes/no`、`on/off` 和 `1/0`。布尔项缺失或无效时使用默认值；整数、浮点数和枚举按各自规则解析。
-字号、基线及边距使用游戏逻辑像素；HiDPI 保留独立的 2× 字形采样，由 GPU 按实际画面倍率合成，不改变文字的视觉尺寸。
+字号、基线及边距使用游戏逻辑像素；三个后端的 HiDPI 均保留独立的 2～8× 字形采样，按实际画面倍率合成，不改变文字的视觉尺寸。
 
 | 参数 | 默认值 | 作用与取值 |
 | --- | --- | --- |
@@ -82,7 +82,7 @@ cmake --build --preset deploy
 | `MixedScriptCenter` | `true` | 自然单行中，中英文混排时按英文大写高度与中文字面居中英文整段。所有英文共用同一基线偏移，保留字体自身的上标和下伸笔画；纯英文和纯中文行不移动。 |
 | `LegacyCodepage1252` | `true` | 将 `U+0080～U+009F` 中 27 个旧码位按 Windows-1252 映射为 Unicode 字形；`false` 严格按原始 Unicode 解释。不修改 CSF 或正确的 Unicode 字符。 |
 | `Present32` | `true` | 检测 cnc-ddraw，在 BGRA8 呈现阶段合成文字，提高抗锯齿边缘的颜色精度。关闭、无 cnc-ddraw 或接入失败时使用 RGB565。 |
-| `HiDPI` | `true` | 在 `Present32` 路径下跟随 D3D9 实际 X/Y 放大倍率，按较大倍率向上取整生成独立 2～8× 字形，再由 GPU 投影到输出尺寸。4.8×3.6 开场使用直接栅格化的 5× 字形；两轴等于栅格密度时点采样，否则线性过滤。任一轴不放大或其他后端保留原合成；`false` 关闭高清文字层。 |
+| `HiDPI` | `true` | 三后端均跟随实际 X/Y 放大倍率，按较大倍率向上取整生成独立 2～8× 字形。D3D9/OpenGL 在最终画面用 GPU 合成，GDI 在输出尺寸软件合成。4.8×3.6 开场使用直接栅格化的 5× 字形；两轴等于栅格密度时保留原采样，否则线性过滤。任一轴不放大、资源或驱动能力不足时保留逻辑分辨率合成；`false` 关闭高清文字层。 |
 | `DynamicTextWidth` | `true` | 单行布局启用时，按自然文字宽度调整加载目标框、任务消息、tooltip 和侧栏状态背景；同时处理相应墨迹高度与内边距。关闭时保留原矩形度量。 |
 | `LineWidthPadding` | `4` | 自然宽度测量的额外余量，限制为 1～32px。任务消息左右合计至少留 4px；tooltip 还会添加原生内边距。 |
 | `Metrics` | `scaled` | 逐字路径的度量策略：`game` 使用原字宽；`scaled` 使用原字宽乘 `AdvanceScale`；`vector` 使用矢量字体字宽。后两者可能改写游戏字宽并改变布局；推荐 `game` 配合单行排版。 |
@@ -91,7 +91,7 @@ cmake --build --preset deploy
 | `FontFile` | `C:\Windows\Fonts\NotoSerifSC-VF.ttf` | 主字体文件路径，用于中文及相应标点；未指定独立英文字体时也用于英文。文件需在本机存在。 |
 | `FontFileLatin` | 空 | 独立英文、数字及常用半角符号字体；为空或加载失败时使用主字体。 |
 | `FontWeight` | `400` | 可变字体的 `wght` 字重轴值，字体需支持该轴。固定字体的字重由文件决定，不会据此改变 Arial 常规体。 |
-| `FontSizeLatin` | `13` | 英文字体字号，最小 6px。HiDPI 2× 输出时以双倍像素字号栅格化。 |
+| `FontSizeLatin` | `13` | 英文字体字号，最小 6px。HiDPI 按独立的 2～8× 字形密度栅格化，逻辑字号不变。 |
 | `FontSizeCJK` | `16` | 中文及相应标点字号，最小 6px。与英文独立设置，共享基线。 |
 | `BaselineRow` | `13` | 相对游戏传入 Y 的共同基线位置，限制为 1～32；增大会整体下移文字，不会逐字按轮廓对齐。 |
 | `Supersample` | `2` | 1～4 倍栅格化后降采样；`1` 直接在目标像素网格栅格化。较高值会改变 hinting 网格并增加开销，与 HiDPI 输出倍率是独立选项。 |
@@ -127,18 +127,20 @@ cmake --build --preset deploy
 | `baseline_test.bat` | 与 FreeType 独立固定基线位图比较，验证中英文、数字、符号、相位、缩放及裁剪 |
 | `render_quality_test.bat` | 当前生产配置的黑底、纹理背景和加载界面 2× 字形预览，以及覆盖率、缓存、度量与字体数据检查 |
 | `present32_test.bat` | 32 位覆盖率精度、稀疏文字层、裁剪、复制、拉伸及重复重绘 |
-| `cnc_present_test.bat` | 三后端实际像素、复制、翻页、清除；2× 独立采样与线性混合、小数倍率的接缝和清除、切回 1×、无边框/独占全屏及关闭选项回退 |
+| `cnc_present_test.bat` | 三后端实际像素、复制、翻页、清除；2× 独立采样、线性/非线性混合、4.8×3.6 字幕、连续缩放和关闭 HiDPI；另含 D3D9 无边框/独占全屏及回退。`--parity-only` 专测三后端能力一致性。 |
+| CTest `scaled_composition` | GDI 稀疏高密度文字与独立连续图像采样对照：2/5/8× 字形、裁剪、接缝、非等比输出和两种混合模式 |
 | `takeover_test.bat` | 单行拒绝后的逐字接管、颜色、抗锯齿、裁剪和缺字回退 |
 | `hooktest_draw.bat --mode draw` | 逐字 hook 的 ESP/EAX、返回跳板与拒绝路径；仅支持 `off`、`observe`、`draw` |
 | `python tools\preview_guides.py` | 显示上、中、下辅助线与实际墨迹范围，完整行按最近邻放大 |
 | `python tools\verify_dll.py` | DLL 导出、16 条钩子记录、字幕擦除机器码、重定位、Phobos/Ares 导入依赖和本机 Phobos hook 区间冲突检查 |
 
 预览图输出到 `build/render-qa/`。离线通过仍需结合实际游戏画面验收。
-当前 22 项离线 CTest 通过，包含字幕换色后的完整擦除、高清采样边缘、加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数和非等比倍率图集采样对照。
-本机 D3D9、OpenGL、GDI 显示检查均通过，D3D9 的 2×、小数倍率、动态缩放和全屏回退检查也通过；其他机器、驱动和 cnc-ddraw 版本仍需验证。
+当前 27 项离线 CTest 通过，包含字幕换色后的完整擦除、高清采样边缘、加载界面内存表面的文字复制、重复重绘和销毁复用，以及小数和非等比倍率采样对照。
+本机三后端的精确 2×、4.8×3.6、连续窗口缩放、字幕密度切换、两种混合模式及关闭 HiDPI 检查均通过。
+三后端共享字号、混排基线、字幕描边和独立高清采样；GDI 使用 CPU 合成，性能不与 GPU 后端等同，驱动的颜色舍入也可能有细小差异。其他机器、驱动和 cnc-ddraw 版本仍需验证。
 游戏目录的 `VectorText.log` 记录 `LINE ready`、`LINE fallback`、`LINE native icon`
 和 `DYNAMIC width`，可确认实际调用是否命中。
-加载界面的原生 `BSurface` 内存目标也接入高精度文字层，复制到显示表面时保留独立的 2× 采样。
+加载界面的原生 `BSurface` 内存目标也接入高精度文字层，复制到显示表面时保留独立的高密度采样。
 `output text scale=2x2` 只说明呈现器启用了 2×，不能证明所有绘字目标均已接管；
 `CPU text surface registered ... hi-raster=1` 可确认加载内存表面已登记。最终效果仍需重启游戏后检查。
 原版 800×600 拉伸到 3840×2160 时，日志应显示 `output text scale=4.8x3.6`；

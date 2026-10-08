@@ -84,6 +84,8 @@ struct State
     bool autoTextScale = false;
     bool cpuTextReady = false;
     bool profile = false;
+    float outputScaleX = 0, outputScaleY = 0;
+    int outputRaster = 0;
     LARGE_INTEGER frequency{};
 #ifdef VT_PRESENT_TEST
     std::vector<uint32_t> last;
@@ -136,6 +138,7 @@ HRESULT WINAPI HookDDQuery(void *object, REFIID iid, void **output);
 bool Detour(HMODULE module, const char *name, void *replacement, void **original);
 bool InstallGdi();
 bool InstallOpenGL();
+bool ObserveOutput(float sx,float sy,int raster);
 FARPROC ResolveD3D9Create(FARPROC original);
 struct Guard
 {

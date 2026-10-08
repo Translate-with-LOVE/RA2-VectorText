@@ -410,6 +410,9 @@ int main(int argc,char** argv) {
         CW_USEDEFAULT,CW_USEDEFAULT,fractional ? desired.right-desired.left : output2?1296:656,
         fractional ? desired.bottom-desired.top : output2?999:519,nullptr,nullptr,wc.hInstance,nullptr);
     ShowWindow(window,SW_SHOWNOACTIVATE);
+    // Pixel checks must sample the renderer rather than an overlapping app.
+    // Keep this short-lived QA window visible without taking keyboard focus.
+    SetWindowPos(window,HWND_TOPMOST,80,80,0,0,SWP_NOSIZE|SWP_NOACTIVATE);
     HMODULE module=LoadLibraryA("ddraw.dll");
     if(!module) return 2;
     using Create=HRESULT(WINAPI*)(GUID*,LPDIRECTDRAW*,IUnknown*);
@@ -448,9 +451,9 @@ int main(int argc,char** argv) {
                       : actualScale==0 && actualScaleY==0,
             "fractional scale follows actual cnc-ddraw quad and respects HiDPI switch");
         Check(!enabled || (vt::OutputRasterScale()==density && vt::Presentation32::TestObservedRaster()==density),
-            "actual output density selects an independent raster and a matching GPU atlas");
+            "actual output density selects an independent raster and a matching presenter");
         HDC dc=GetDC(window);
-        const int ref=enabled ? 224 : 186;
+        const int ref=vt::Cfg::LinearBlend() ? (enabled ? 224 : 186) : (enabled ? 192 : 128);
         const int actual=GetRValue(GetPixel(dc,(int)ceil(32*requestedScale),(int)ceil(16*requestedScaleY)));
         printf("fractional tile-seam pixel=%d expected=%d\n",actual,ref);
         Check(abs(actual-ref)<=4,"fractional tile junction has continuous high-resolution coverage");
@@ -510,13 +513,13 @@ int main(int argc,char** argv) {
                         if(GetRValue(candidate)>GetRValue(rimOnBlack)) {rimOnBlack=candidate;rimX=xx;}
                     }
                     Check(GetRValue(rimOnBlack)>130 && GetGValue(rimOnBlack)>130,
-                        "D3D9 dark caption has a visible white separating rim");
+                        "presenter dark caption has a visible white separating rim");
                 } else {
                     const COLORREF rim=GetPixel(dc,rimX,sampleY);
-                    Check(rim==rimOnBlack,"D3D9 caption rim retains its color across black and white movie frames");
+                    Check(rim==rimOnBlack,"presenter caption rim retains its color across black and white movie frames");
                 }
                 Check(GetPixel(dc,(int)ceil(32*requestedScale),sampleY)==RGB(0,0,255),
-                    "D3D9 stable subtitle rim preserves the blue body");
+                    "presenter stable subtitle rim preserves the blue body");
                 ReleaseDC(window,dc);
             }
             primary->Blt(nullptr,nullptr,nullptr,DDBLT_COLORFILL|DDBLT_WAIT,&fill);Pump(300);

@@ -70,7 +70,7 @@ set(VT_HOOK_SOURCES
 set(VT_PRESENTATION_SOURCES
     src/Presentation32.cpp src/presentation/State.cpp src/presentation/Surfaces.cpp
     src/presentation/Gdi.cpp src/presentation/D3d9.cpp src/presentation/OpenGL.cpp
-    src/presentation/Atlas.cpp)
+    src/presentation/Atlas.cpp src/presentation/GlOverlay.cpp)
 add_library(VectorText SHARED src/DllMain.cpp ${VT_HOOK_SOURCES} ${VT_PRESENTATION_SOURCES})
 target_compile_definitions(VectorText PRIVATE SYR_VER=2)
 target_compile_options(VectorText PRIVATE /W4)
@@ -140,6 +140,8 @@ if(BUILD_TESTING)
     add_dependencies(hooktest_draw VectorText)
     vt_test_executable(present32_test present32-test tools/present32_test.cpp)
     target_link_libraries(present32_test PRIVATE vt_plane)
+    vt_test_executable(scaled_composition_test scaled-test tools/scaled_composition_test.cpp)
+    target_link_libraries(scaled_composition_test PRIVATE vt_plane)
     vt_test_executable(cnc_present_test cnc-test tools/cnc_present_test.cpp
         ${VT_PRESENTATION_SOURCES} src/presentation/TestAccess.cpp)
     target_compile_definitions(cnc_present_test PRIVATE VT_PRESENT_TEST)
@@ -176,6 +178,7 @@ if(BUILD_TESTING)
     vt_check(quality_startup_5x render_quality startup-5x.bmp --check --line --bgra --startup --hidpi --raster 5)
     vt_check(cpu_loading_text cnc_present_test --cpu-text)
     vt_check(async_movie_frames cnc_present_test --movie-frames)
+    vt_check(scaled_composition scaled_composition_test)
     vt_check(fractional_overlay cnc_present_test --fractional-offline)
     # These checks need an interactive desktop; the offline preset excludes them.
     add_test(NAME cnc_display COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cnc_present_test.bat")

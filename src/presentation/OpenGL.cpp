@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 #include "State.h"
+#include "GlOverlay.h"
 
 // OpenGL BGRA8 texture uploads; preserve pixel-unpack state.
 namespace vt::Presentation32::detail
@@ -39,6 +40,8 @@ void APIENTRY HookSub(GLenum target, GLint level, GLint x, GLint y, GLsizei w, G
                       const void *pixels)
 {
     std::vector<uint32_t> out;
+    std::vector<uint32_t> background;
+    std::shared_ptr<PixelPlane> frame;
     if (FromCnc(_ReturnAddress()) && target == GL_TEXTURE_2D && level == 0 && format == GL_RGB && type == 0x8363 &&
         pixels && glGetInt && glStore)
     {
@@ -57,13 +60,23 @@ void APIENTRY HookSub(GLenum target, GLint level, GLint x, GLint y, GLsizei w, G
                  row == it->second->pitch))
             {
                 out.resize((size_t)w * h);
-                it->second->plane.ValidateNative((const unsigned short *)pixels, it->second->pitch);
-                it->second->plane.CompositeRect(it->second->base, it->second->pitch, out.data(), w, {0, 0, w, h});
+                frame = std::make_shared<PixelPlane>(it->second->plane);
+                frame->ValidateNative((const unsigned short *)pixels, it->second->pitch);
+                frame->CompositeRect(it->second->base, it->second->pitch, out.data(), w, {0, 0, w, h});
+                if (state->autoTextScale)
+                {
+                    background.resize(out.size());
+                    frame->BackgroundRect(it->second->base, it->second->pitch, background.data(), w, {0, 0, w, h});
+                }
                 RecordFrame(out.data(), w, h, w);
             }
         }
         if (!out.empty())
         {
+            GLint texture = 0;
+            glGetInt(GL_TEXTURE_BINDING_2D, &texture);
+            if (state->autoTextScale && StageGlFrame(texture, w, h, frame))
+                out.swap(background);
             glStore(GL_UNPACK_ROW_LENGTH, 0);
             glStore(GL_UNPACK_ALIGNMENT, 4);
             realSub(target, level, x, y, w, h, 0x80E1, GL_UNSIGNED_BYTE, out.data());
@@ -91,6 +104,8 @@ bool InstallOpenGL()
             Log::Note("Present32: OpenGL upload detours unavailable; retaining RGB565");
             return false;
         }
+        if (!InstallGlOverlay(ogl))
+            return false;
     }
     return true;
 }

@@ -86,6 +86,9 @@ namespace vt
         std::vector<PixelRect> TextTiles(bool filtered = false) const;
         void Overlay2Rect(uint32_t* output,int outputPitch,PixelRect rect) const;
         void OverlayRect(uint32_t* output,int outputPitch,PixelRect rect,int scale) const;
+        // Composite independent high-grid ink onto an already scaled BGRA8
+        // background. Used by software presenters, with sparse bilinear work.
+        void CompositeScaledRect(uint32_t* output,int pitch,int width,int height,PixelRect source) const;
         struct NativeSample { int x, y; unsigned short base; unsigned int generation; };
         std::vector<NativeSample> CaptureNative(const unsigned short* base, int pitch,
                                                PixelRect rect) const;

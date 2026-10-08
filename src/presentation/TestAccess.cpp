@@ -11,6 +11,7 @@ float TestObservedScale(bool vertical)
     if (!state)
         return 0;
     Guard guard;
+    if(state->stats.backend!=2) return vertical ? state->outputScaleY : state->outputScaleX;
     for (const auto &entry : state->textures)
         if (entry.second.overlayReady && entry.second.cleanWorld)
             return vertical ? entry.second.reportedScaleY : entry.second.reportedScale;
@@ -20,6 +21,7 @@ int TestObservedRaster()
 {
     if(!state) return 0;
     Guard guard;
+    if(state->stats.backend!=2) return state->outputRaster;
     for(const auto& entry:state->textures)
         if(entry.second.overlayReady && entry.second.cleanWorld) return entry.second.rasterScale;
     return 0;

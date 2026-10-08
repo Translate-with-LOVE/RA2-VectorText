@@ -12,6 +12,7 @@ if "%~1"=="--2x-only" goto output2
 if "%~1"=="--perf-only" goto performance
 if "%~1"=="--fractional-only" goto fractional
 if "%~1"=="--stretch-only" goto stretched
+if "%~1"=="--parity-only" goto parity
 for %%R in (direct3d9 opengl gdi) do (
     >ddraw.ini echo [ddraw]
     >>ddraw.ini echo renderer=%%R
@@ -29,6 +30,10 @@ for %%R in (direct3d9 opengl gdi) do (
     if errorlevel 1 (popd & exit /b 1)
 )
 :output2
+if "%~1"=="--2x-only" goto output2_legacy
+call :parity_checks
+if errorlevel 1 (popd & exit /b 1)
+:output2_legacy
 call :configure2
 echo [*] cnc-ddraw 2x output, bicubic world + independent text
 cnc_present_test.exe --2x
@@ -114,6 +119,51 @@ set "RC=%ERRORLEVEL%"
 popd
 exit /b %RC%
 
+:parity
+call :parity_checks
+set "RC=%ERRORLEVEL%"
+copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+popd
+exit /b %RC%
+
+:parity_checks
+for %%R in (direct3d9 opengl gdi) do (
+    copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+    call :configure2 1280 960 %%R
+    echo [*] %%R: exact 2x samples, partial alpha and atlas lifecycle
+    cnc_present_test.exe --2x
+    if errorlevel 1 exit /b 1
+    call :configure2 3072 1728 %%R
+    echo [*] %%R: 4.8x3.6, subtitles and returning captions
+    cnc_present_test.exe --fractional 4.8 3.6
+    if errorlevel 1 exit /b 1
+    call :configure2 960 720 %%R
+    echo [*] %%R: 1.5x and live viewport changes
+    cnc_present_test.exe --fractional 1.5
+    if errorlevel 1 exit /b 1
+    call :configure2 3072 1728 %%R
+    >VectorText.ini echo [VectorText]
+    >>VectorText.ini echo Enabled=true
+    >>VectorText.ini echo Mode=draw
+    >>VectorText.ini echo Present32=true
+    >>VectorText.ini echo HiDPI=true
+    >>VectorText.ini echo LinearBlend=false
+    echo [*] %%R: non-linear blending
+    cnc_present_test.exe --fractional 4.8 3.6
+    if errorlevel 1 exit /b 1
+    call :configure2 1536 864 %%R
+    >VectorText.ini echo [VectorText]
+    >>VectorText.ini echo Enabled=true
+    >>VectorText.ini echo Mode=draw
+    >>VectorText.ini echo Present32=true
+    >>VectorText.ini echo HiDPI=false
+    echo [*] %%R: HiDPI disabled
+    cnc_present_test.exe --fractional 2.4 1.8
+    if errorlevel 1 exit /b 1
+)
+copy /y "%ROOT%VectorText.ini" VectorText.ini >nul
+exit /b 0
+
 :stretch_checks
 call :configure2 3072 1728
 echo [*] cnc-ddraw original startup scale 4.8x3.6 with independent 5x glyphs
@@ -163,12 +213,14 @@ popd
 exit /b %RC%
 
 :configure2
+set "VT_TEST_RENDERER=direct3d9"
+if not "%~3"=="" set "VT_TEST_RENDERER=%~3"
 set "VT_OUTPUT_WIDTH=1280"
 set "VT_OUTPUT_HEIGHT=960"
 if not "%~1"=="" set "VT_OUTPUT_WIDTH=%~1"
 if not "%~2"=="" set "VT_OUTPUT_HEIGHT=%~2"
 >ddraw.ini echo [ddraw]
->>ddraw.ini echo renderer=direct3d9
+>>ddraw.ini echo renderer=%VT_TEST_RENDERER%
 >>ddraw.ini echo windowed=true
 >>ddraw.ini echo fullscreen=false
 >>ddraw.ini echo width=%VT_OUTPUT_WIDTH%
