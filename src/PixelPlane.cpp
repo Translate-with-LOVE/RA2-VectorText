@@ -4,6 +4,7 @@
 #include <set>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace vt
 {
@@ -57,6 +58,15 @@ namespace vt
             if(p.grid) { for(const auto& s:p.grid->pixels) if(s.edge) return true; }
             else if(p.high) for(const auto& s:p.samples) if(s.edge) return true;
             return false;
+        }
+        template <class Pixel>
+        bool ValidRows(const Pixel* pixels, int pitch, int width, int height)
+        {
+            if (!pixels || width <= 0 || height <= 0 || pitch < width) return false;
+            // Bound the final row and its width in bytes on the 32-bit host.
+            constexpr auto limit = std::numeric_limits<size_t>::max() / sizeof(Pixel);
+            return static_cast<size_t>(width) <= limit &&
+                static_cast<size_t>(height - 1) <= (limit - width) / static_cast<size_t>(pitch);
         }
     }
 
@@ -575,11 +585,25 @@ namespace vt
         return 0xFF000000u | (channel(p.r, 16) << 16) | (channel(p.g, 8) << 8) | channel(p.b, 0);
     }
 
+    std::optional<PixelRect> PixelPlane::ValidateBlitArguments(const unsigned short* source, int sourcePitch,
+                                                             uint32_t* output, int outputPitch, PixelRect rect) const
+    {
+        rect = Clip(rect);
+        // Test ordering matters: don't subtract untrusted/extreme coordinates
+        // until the rectangle is nonempty and bounded by the plane.
+        if (rect.left >= rect.right || rect.top >= rect.bottom ||
+            !ValidRows(source, sourcePitch, m_width, m_height) ||
+            !ValidRows(output, outputPitch, rect.right - rect.left, rect.bottom - rect.top))
+            return std::nullopt;
+        return rect;
+    }
+
     void PixelPlane::CompositeRect(const unsigned short* source, int sourcePitch,
                                    uint32_t* output, int outputPitch, PixelRect rect) const
     {
-        rect = Clip(rect);
-        if (!source || !output || sourcePitch < m_width || outputPitch < rect.right - rect.left) return;
+        const auto validated = ValidateBlitArguments(source, sourcePitch, output, outputPitch, rect);
+        if (!validated) return;
+        rect = *validated;
         for (int y = rect.top; y < rect.bottom; ++y)
             for (int x = rect.left; x < rect.right; ++x)
                 output[(size_t)(y - rect.top) * outputPitch + x - rect.left] =
@@ -601,7 +625,9 @@ namespace vt
 
     void PixelPlane::BackgroundRect(const unsigned short* source,int sourcePitch,uint32_t* output,int outputPitch,PixelRect rect) const
     {
-        rect=Clip(rect);
+        const auto validated = ValidateBlitArguments(source, sourcePitch, output, outputPitch, rect);
+        if (!validated) return;
+        rect = *validated;
         const auto* rgb565=Tables().rgb565;
         for(int y=rect.top;y<rect.bottom;++y) for(int x=rect.left;x<rect.right;++x)
             output[(size_t)(y-rect.top)*outputPitch+x-rect.left]=rgb565[source[(size_t)y*sourcePitch+x]];

@@ -8,6 +8,7 @@
 #include <array>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdint.h>
 #include <vector>
 
@@ -77,6 +78,9 @@ namespace vt
                   bool mirrorX = false, bool mirrorY = false);
 
         // BGRA8 output; antialiased text never undergoes 5/6/5 quantisation.
+        // Rect operations clip to the plane; output starts at the clipped
+        // top-left. Pitches count pixels, source covers the full plane, and
+        // output covers the clipped rectangle. Invalid inputs are a no-op.
         uint32_t Composite(int x, int y, unsigned short background) const;
         void CompositeRect(const unsigned short* source, int sourcePitch,
                            uint32_t* output, int outputPitch, PixelRect rect) const;
@@ -118,6 +122,8 @@ namespace vt
         unsigned int m_generation = 0;
         unsigned int m_writeBoundary = 0;
         PixelRect Clip(PixelRect rect) const;
+        std::optional<PixelRect> ValidateBlitArguments(const unsigned short* source, int sourcePitch,
+                                                     uint32_t* output, int outputPitch, PixelRect rect) const;
         PlanePixel Color(unsigned short color, int coverage) const;
         static PlanePixel Over(PlanePixel source, PlanePixel dest);
         uint32_t CompositeInk(PlanePixel pixel,unsigned short background) const;

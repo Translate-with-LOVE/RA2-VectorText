@@ -25,8 +25,9 @@ static void Check()
     const unsigned char original[] = {0x8B, 0x44, 0x24, 0x04, 0x83, 0xC0, 0x01, 0xC2, 0x04, 0x00};
     memcpy(code, original, sizeof(original));
     resume = (DWORD)(code + 7);
-    const unsigned int bytes = vt::RuntimeHooks::BuildStub(code + 128, (DWORD)code, 7, original, Handler);
-    CHECK(bytes <= 128, "runtime stub stays within its reserved slot");
+    const auto bytes = vt::RuntimeHooks::BuildStub({code + 128, 128}, (DWORD)code, 7, original, Handler);
+    CHECK(bytes && *bytes == vt::RuntimeHooks::StubSize(7), "runtime stub fits and emits its computed size");
+    if (!bytes) { VirtualFree(code, 0, MEM_RELEASE); return; }
     dimension_machine::Jump(code, code + 128);
     code[5] = code[6] = 0x90;
     FlushInstructionCache(GetCurrentProcess(), code, 4096);

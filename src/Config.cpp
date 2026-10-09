@@ -1,40 +1,40 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ConfigState.h"
+#include "ConfigParsing.h"
 #include "Logger.h"
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
-#include <cctype>
+#include <array>
 
 namespace vt::config
 {
 bool g_enabled = true;
 bool g_detailed = true;
 bool g_blitDetail = false;
-int g_maxUnique = 4000;
-DWORD g_flushMs = 2000;
+int g_maxUnique = parsing::maxUnique.defaultValue;
+DWORD g_flushMs = parsing::flushMs.defaultValue;
 char g_dir[MAX_PATH] = {0};
 char g_logName[MAX_PATH] = "VectorText.log";
 // Cached rendering values; loaded under the logger initialization lock.
 int g_cfgMode = Cfg::Mode_Observe;
 char g_cfgFont[MAX_PATH] = "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf";
-int g_cfgWeight = 400;
-int g_cfgSizeLatin = 13;
-int g_cfgSizeCJK = 16;
-int g_cfgBaseline = 13;
+int g_cfgWeight = parsing::weight.defaultValue;
+int g_cfgSizeLatin = parsing::latinSize.defaultValue;
+int g_cfgSizeCJK = parsing::cjkSize.defaultValue;
+int g_cfgBaseline = parsing::baseline.defaultValue;
 bool g_cfgFit = true;
 bool g_cfgAA = true;
 bool g_cfgProbe = true;
-int g_cfgDarkening = 0;
-double g_cfgGamma = 1.0;
+int g_cfgDarkening = parsing::darkening.defaultValue;
+double g_cfgGamma = parsing::gamma.defaultValue;
 bool g_cfgVecMetrics = false;
-int g_cfgSS = 2;
+int g_cfgSS = parsing::supersample.defaultValue;
 bool g_cfgLinear = true;
 bool g_cfgDither = true;
-int g_cfgOutline = 0;
-unsigned int g_cfgOutlineColor = 0x0000;
-double g_cfgAdvScale = 1.0;
+int g_cfgOutline = parsing::outline.defaultValue;
+unsigned short g_cfgOutlineColor = parsing::outlineColor.defaultValue;
+double g_cfgAdvScale = parsing::advanceScale.defaultValue;
 bool g_cfgLegacy1252 = true;
 bool g_cfgHiDPI = true;
 
@@ -48,24 +48,37 @@ void GetGameDir()
     strncpy_s(g_dir, path, _TRUNCATE);
 }
 
+namespace
+{
+using namespace parsing;
+// A truncated INI token is invalid; never parse an apparently valid prefix.
+struct ProfileValue
+{
+    std::array<char, 128> bytes{};
+    std::string_view View() const noexcept { return bytes.data(); }
+};
+ProfileValue ReadValue(const char *ini, const char *key)
+{
+    ProfileValue value;
+    const auto size = GetPrivateProfileStringA("VectorText", key, "", value.bytes.data(),
+        static_cast<DWORD>(value.bytes.size()), ini);
+    if (size >= value.bytes.size() - 1) value.bytes[0] = '\0';
+    return value;
+}
+template <class Value, std::int64_t Default, std::int64_t Minimum, std::int64_t Maximum>
+Value ReadNumber(const char *ini, const IntegerOption<Value, Default, Minimum, Maximum> &option)
+{
+    return option.Parse(ReadValue(ini, option.key).View());
+}
+double ReadNumber(const char *ini, const RealOption &option)
+{
+    return option.Parse(ReadValue(ini, option.key).View());
+}
+} // namespace
+
 bool ReadBool(const char *ini, const char *key, bool def)
 {
-    char value[64] = {};
-    GetPrivateProfileStringA("VectorText", key, "", value, sizeof(value), ini);
-    char *first = value;
-    while (isspace((unsigned char)*first))
-        ++first;
-    char *end = first + strlen(first);
-    while (end > first && isspace((unsigned char)end[-1]))
-        --end;
-    *end = 0;
-    if (!_stricmp(first, "true") || !_stricmp(first, "yes") || !_stricmp(first, "on"))
-        return true;
-    if (!_stricmp(first, "false") || !_stricmp(first, "no") || !_stricmp(first, "off"))
-        return false;
-    char *numberEnd = NULL;
-    const long number = strtol(first, &numberEnd, 0);
-    return numberEnd != first && !*numberEnd ? number != 0 : def;
+    return parsing::Boolean(ReadValue(ini, key).View()).value_or(def);
 }
 
 void ReadConfig()
@@ -76,14 +89,9 @@ void ReadConfig()
     g_enabled = ReadBool(ini, "Enabled", true);
     g_detailed = ReadBool(ini, "Detailed", true);
     g_blitDetail = ReadBool(ini, "LogBitFontBlitDetails", false);
-    g_maxUnique = GetPrivateProfileIntA("VectorText", "MaxUniqueStrings", 4000, ini);
-    g_flushMs = (DWORD)GetPrivateProfileIntA("VectorText", "FlushIntervalMs", 2000, ini);
+    g_maxUnique = ReadNumber(ini, parsing::maxUnique);
+    g_flushMs = ReadNumber(ini, parsing::flushMs);
     GetPrivateProfileStringA("VectorText", "LogFileName", "VectorText.log", g_logName, MAX_PATH, ini);
-
-    if (g_maxUnique < 16)
-        g_maxUnique = 16;
-    if (g_flushMs < 250)
-        g_flushMs = 250;
 
     // ---- cached rendering configuration ---------------------------
     char mode[32] = {0};
@@ -97,59 +105,26 @@ void ReadConfig()
 
     GetPrivateProfileStringA("VectorText", "FontFile", "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf", g_cfgFont, MAX_PATH,
                              ini);
-    g_cfgWeight = GetPrivateProfileIntA("VectorText", "FontWeight", 400, ini);
-    g_cfgSizeLatin = GetPrivateProfileIntA("VectorText", "FontSizeLatin", 13, ini);
-    g_cfgSizeCJK = GetPrivateProfileIntA("VectorText", "FontSizeCJK", 16, ini);
-    g_cfgBaseline = GetPrivateProfileIntA("VectorText", "BaselineRow", 13, ini);
+    g_cfgWeight = ReadNumber(ini, parsing::weight);
+    g_cfgSizeLatin = ReadNumber(ini, parsing::latinSize);
+    g_cfgSizeCJK = ReadNumber(ini, parsing::cjkSize);
+    g_cfgBaseline = ReadNumber(ini, parsing::baseline);
     g_cfgFit = ReadBool(ini, "FitToAdvance", true);
     g_cfgAA = ReadBool(ini, "AntiAlias", true);
     g_cfgProbe = ReadBool(ini, "Probe", true);
-    g_cfgDarkening = GetPrivateProfileIntA("VectorText", "StemDarkening", 0, ini);
-    g_cfgSS = GetPrivateProfileIntA("VectorText", "Supersample", 2, ini);
+    g_cfgDarkening = ReadNumber(ini, parsing::darkening);
+    g_cfgSS = ReadNumber(ini, parsing::supersample);
     g_cfgLinear = ReadBool(ini, "LinearBlend", true);
     g_cfgDither = ReadBool(ini, "Dither", true);
     g_cfgLegacy1252 = ReadBool(ini, "LegacyCodepage1252", true);
     g_cfgHiDPI = ReadBool(ini, "HiDPI", true);
-    g_cfgOutline = GetPrivateProfileIntA("VectorText", "Outline", 0, ini);
-    {
-        char oc[32] = {0};
-        GetPrivateProfileStringA("VectorText", "OutlineColor", "0x0000", oc, sizeof(oc), ini);
-        g_cfgOutlineColor = (unsigned int)strtoul(oc, NULL, 0) & 0xFFFFu;
-    }
-    if (g_cfgSS < 1)
-        g_cfgSS = 1;
-    if (g_cfgSS > 4)
-        g_cfgSS = 4;
-    {
-        char m[32] = {0};
-        char s[32] = {0};
-        GetPrivateProfileStringA("VectorText", "Metrics", "scaled", m, sizeof(m), ini);
-        GetPrivateProfileStringA("VectorText", "AdvanceScale", "1.05", s, sizeof(s), ini);
-        g_cfgVecMetrics = !_stricmp(m, "vector");
-        g_cfgAdvScale = (!_stricmp(m, "scaled")) ? atof(s) : 1.0;
-        if (g_cfgAdvScale < 1.0)
-            g_cfgAdvScale = 1.0;
-        if (g_cfgAdvScale > 2.0)
-            g_cfgAdvScale = 2.0;
-    }
-    {
-        char buf[32] = {0};
-        GetPrivateProfileStringA("VectorText", "Gamma", "1.0", buf, sizeof(buf), ini);
-        g_cfgGamma = atof(buf);
-        if (g_cfgGamma < 0.5)
-            g_cfgGamma = 0.5;
-        if (g_cfgGamma > 3.0)
-            g_cfgGamma = 3.0;
-    }
-
-    if (g_cfgSizeLatin < 6)
-        g_cfgSizeLatin = 6;
-    if (g_cfgSizeCJK < 6)
-        g_cfgSizeCJK = 6;
-    if (g_cfgBaseline < 1)
-        g_cfgBaseline = 1;
-    if (g_cfgBaseline > 32)
-        g_cfgBaseline = 32;
+    g_cfgOutline = ReadNumber(ini, parsing::outline);
+    g_cfgOutlineColor = ReadNumber(ini, parsing::outlineColor);
+    char metrics[32]{};
+    GetPrivateProfileStringA("VectorText", "Metrics", "scaled", metrics, sizeof(metrics), ini);
+    g_cfgVecMetrics = !_stricmp(metrics, "vector");
+    g_cfgAdvScale = !_stricmp(metrics, "scaled") ? ReadNumber(ini, parsing::advanceScale) : 1.0;
+    g_cfgGamma = ReadNumber(ini, parsing::gamma);
 }
 
 } // namespace vt::config
@@ -256,7 +231,7 @@ int Outline()
 unsigned short OutlineColor()
 {
     Load();
-    return (unsigned short)g_cfgOutlineColor;
+    return g_cfgOutlineColor;
 }
 bool LegacyCodepage1252()
 {
@@ -293,7 +268,9 @@ int ConfigInt(const char *key, int def)
     if (!g_dir[0])
         GetGameDir();
     _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
-    return GetPrivateProfileIntA("VectorText", key, def, ini);
+    const auto value = parsing::Integer(ReadValue(ini, key).View());
+    if (!value || *value < parsing::intMin || *value > parsing::intMax) return def;
+    return static_cast<int>(*value);
 }
 } // namespace Cfg
 } // namespace vt

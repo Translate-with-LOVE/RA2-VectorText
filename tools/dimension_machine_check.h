@@ -59,8 +59,9 @@ namespace dimension_machine
     static void Stub(unsigned char* at, unsigned char* resume, const unsigned char* replay,
                      DWORD origin, DWORD(__cdecl* dispatch)(REGISTERS*), int replayBytes = 6)
     {
-        const unsigned int size = vt::RuntimeHooks::BuildStub(at, origin, replayBytes, replay, dispatch);
-        Jump(at + size - 5, resume);
+        const auto size = vt::RuntimeHooks::BuildStub({at, 128}, origin, replayBytes, replay, dispatch);
+        CHECK(size.has_value(), "measurement stub fits its reserved buffer");
+        if (size) Jump(at + *size - 5, resume);
     }
 
     static unsigned char* LoadRoutine()

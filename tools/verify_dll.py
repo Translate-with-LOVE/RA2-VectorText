@@ -32,6 +32,7 @@ DEFAULT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '
 # passing an incomplete list of Windows 8/10-only functions. Dynamic rendering
 # APIs are checked separately in source; this is a loader/import check only.
 WIN7_KERNEL32 = set('''
+GetSystemInfo OutputDebugStringA RaiseFailFastException
 VirtualQuery DisableThreadLibraryCalls QueryPerformanceCounter QueryPerformanceFrequency
 InitializeCriticalSection InitializeCriticalSectionAndSpinCount EnterCriticalSection LeaveCriticalSection VirtualProtect
 GetModuleFileNameA GetModuleHandleW GetProcAddress LoadLibraryW CreateFileA GetFileSize
