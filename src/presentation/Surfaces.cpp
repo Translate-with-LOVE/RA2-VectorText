@@ -6,6 +6,21 @@
 // DirectDraw/BSurface lifetime, native copy/fill and sparse sidecar propagation.
 namespace vt::Presentation32::detail
 {
+std::shared_ptr<Buffer> Primary()
+{
+    void *object;
+    {
+        Guard guard;
+        object = state->primary;
+    }
+    DDSURFACEDESC2 d{};
+    // Rendering is already inside cnc-ddraw's own global lock. Refresh
+    // the public descriptor, including the address swapped by Flip.
+    if (!Describe(object, d))
+        return nullptr;
+    Guard guard;
+    return Remember(object, d);
+}
 using Desc = HRESULT(WINAPI *)(void *, DDSURFACEDESC2 *);
 bool Describe(void *object, DDSURFACEDESC2 &d)
 {

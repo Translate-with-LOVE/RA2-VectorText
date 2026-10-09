@@ -198,4 +198,15 @@ void Stats(unsigned long long *drawn, unsigned long long *skipped, unsigned long
     if (unknown)
         *unknown = g_unknown;
 }
+
+void ShutdownSummary(char *out, int cch)
+{
+    if (!out || cch <= 0) return;
+    char diagnostics[256]{};
+    DiagLine(diagnostics, sizeof(diagnostics));
+    _snprintf_s(out, static_cast<size_t>(cch), _TRUNCATE,
+                " M1 takeover: drawn=%llu skipped=%llu failed=%llu unknownGlyph=%llu\r\n"
+                " M1 refusals : %s\r\n M1 diagnostics: %s",
+                g_drawn, g_skipped, g_failed, g_unknown, ReasonSummary(), diagnostics);
+}
 } // namespace vt::Takeover

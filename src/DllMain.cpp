@@ -12,6 +12,7 @@
 #include "Presentation32.h"
 #include "GameAddresses.h"
 #include "RuntimeHooks.h"
+#include "Takeover.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -88,11 +89,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID /*reserved*/)
         break;
 
     case DLL_PROCESS_DETACH:
+    {
         // Best effort: periodic summaries contain hook counts and observed text.
         // Shutdown adds final counts and takeover diagnostics; abrupt process
         // termination may bypass this detach path entirely.
-        vt::Log::Shutdown();
+        char summary[2048]{};
+        vt::Takeover::ShutdownSummary(summary, sizeof(summary));
+        vt::Log::Shutdown(summary);
         break;
+    }
 
     default:
         break;

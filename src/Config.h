@@ -4,7 +4,7 @@
 
 namespace vt
 {
-// Configuration (VectorText.ini, read lazily in-process like the logger)
+// Configuration (VectorText.ini, loaded once on demand independently of logging)
 namespace Cfg
 {
 enum Mode

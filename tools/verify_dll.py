@@ -43,6 +43,7 @@ HeapAlloc HeapReAlloc HeapFree Sleep GetCurrentThreadId OpenThread SuspendThread
 ResumeThread GetThreadContext SetThreadContext CreateToolhelp32Snapshot Thread32First
 Thread32Next VirtualFree DeleteCriticalSection ReleaseSRWLockExclusive AcquireSRWLockExclusive
 WakeAllConditionVariable SleepConditionVariableSRW IsProcessorFeaturePresent
+InitOnceBeginInitialize InitOnceComplete
 GetSystemTimeAsFileTime InitializeSListHead SetUnhandledExceptionFilter GetStartupInfoW
 RaiseException RtlUnwind InterlockedFlushSList SetLastError FlsAlloc FlsGetValue FlsSetValue
 FlsFree TlsAlloc TlsGetValue TlsSetValue TlsFree EncodePointer InitializeCriticalSectionEx ExitProcess TerminateProcess FreeLibrary
@@ -54,6 +55,9 @@ SetEnvironmentVariableW LoadLibraryExW CompareStringW LCMapStringW GetProcessHea
 GetStringTypeW SetStdHandle FlushFileBuffers GetConsoleOutputCP CreateFileW HeapSize
 SetEndOfFile WriteConsoleW
 '''.split())
+# std::call_once uses these Vista-era one-time initialization APIs on MSVC:
+# https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-initoncebegininitialize
+# https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-initoncecomplete
 # WINDOWINFO is available since Windows 98; its physical client rectangle is
 # not cnc-ddraw's virtualized GetClientRect result. No newer DPI API is needed.
 WIN7_USER32 = {'GetWindowInfo'}

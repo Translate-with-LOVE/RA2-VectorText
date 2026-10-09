@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "ConfigState.h"
 #include "ConfigParsing.h"
-#include "Logger.h"
 #include <cstdio>
 #include <cstring>
 #include <array>
+#include <mutex>
 
 namespace vt::config
 {
@@ -16,7 +16,7 @@ int g_maxUnique = parsing::maxUnique.defaultValue;
 DWORD g_flushMs = parsing::flushMs.defaultValue;
 char g_dir[MAX_PATH] = {0};
 char g_logName[MAX_PATH] = "VectorText.log";
-// Cached rendering values; loaded under the logger initialization lock.
+// Cached rendering values; Cfg::Load publishes them once independently of logging.
 int g_cfgMode = Cfg::Mode_Observe;
 char g_cfgFont[MAX_PATH] = "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf";
 int g_cfgWeight = parsing::weight.defaultValue;
@@ -40,12 +40,14 @@ bool g_cfgHiDPI = true;
 
 void GetGameDir()
 {
-    char path[MAX_PATH] = {0};
-    GetModuleFileNameA(NULL, path, MAX_PATH);
-    char *slash = strrchr(path, '\\');
-    if (slash)
-        *(slash + 1) = 0;
-    strncpy_s(g_dir, path, _TRUNCATE);
+    static std::once_flag directoryOnce;
+    std::call_once(directoryOnce, [] {
+        char path[MAX_PATH] = {0};
+        GetModuleFileNameA(NULL, path, MAX_PATH);
+        char *slash = strrchr(path, '\\');
+        if (slash) *(slash + 1) = 0;
+        strncpy_s(g_dir, path, _TRUNCATE);
+    });
 }
 
 namespace
@@ -133,14 +135,18 @@ namespace vt
 {
 using namespace config;
 // ---------------------------------------------------------------- Cfg ---
-// Named rendering getters use Load() and the logger's cached INI values.
+// Named rendering getters use the configuration-owned cached INI values.
 // Generic ConfigStr/ConfigBool/ConfigInt query the INI on each call; their
 // callers cache settings where repeated reads would affect a hot path.
 namespace Cfg
 {
 void Load()
 {
-    Log::Init();
+    static std::once_flag configurationOnce;
+    std::call_once(configurationOnce, [] {
+        GetGameDir();
+        ReadConfig();
+    });
 }
 
 int Mode()
@@ -247,8 +253,7 @@ bool HiDPI()
 void ConfigStr(const char *key, const char *def, char *out, int cch)
 {
     char ini[MAX_PATH];
-    if (!g_dir[0])
-        GetGameDir();
+    GetGameDir();
     _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
     GetPrivateProfileStringA("VectorText", key, def, out, (DWORD)cch, ini);
 }
@@ -256,8 +261,7 @@ void ConfigStr(const char *key, const char *def, char *out, int cch)
 bool ConfigBool(const char *key, bool def)
 {
     char ini[MAX_PATH];
-    if (!g_dir[0])
-        GetGameDir();
+    GetGameDir();
     _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
     return ReadBool(ini, key, def);
 }
@@ -265,8 +269,7 @@ bool ConfigBool(const char *key, bool def)
 int ConfigInt(const char *key, int def)
 {
     char ini[MAX_PATH];
-    if (!g_dir[0])
-        GetGameDir();
+    GetGameDir();
     _snprintf_s(ini, sizeof(ini), _TRUNCATE, "%sVectorText.ini", g_dir);
     const auto value = parsing::Integer(ReadValue(ini, key).View());
     if (!value || *value < parsing::intMin || *value > parsing::intMax) return def;

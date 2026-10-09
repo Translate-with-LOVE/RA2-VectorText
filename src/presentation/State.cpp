@@ -98,21 +98,6 @@ void Disable(const char *reason)
     SetPresentationWriter(nullptr);
     Log::Note("Present32: %s; retaining RGB565", reason);
 }
-std::shared_ptr<Buffer> Primary()
-{
-    void *object;
-    {
-        Guard guard;
-        object = state->primary;
-    }
-    DDSURFACEDESC2 d{};
-    // Rendering is already inside cnc-ddraw's own global lock. Refresh
-    // the public descriptor, including the address swapped by Flip.
-    if (!Describe(object, d))
-        return nullptr;
-    Guard guard;
-    return Remember(object, d);
-}
 void RecordFrame(const uint32_t *pixels, int width, int height, int pitch)
 {
     ++state->stats.frames;

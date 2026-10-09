@@ -33,6 +33,7 @@ void Start(HMODULE module)
     state = new State;
     if (!Cfg::ConfigBool("Enabled", true) || !Cfg::ConfigBool("Present32", true) || Cfg::Mode() != Cfg::Mode_Draw)
         return;
+    Log::Init();
     cncModule = module;
     auto dos = (IMAGE_DOS_HEADER *)module;
     auto nt = (IMAGE_NT_HEADERS *)((char *)module + dos->e_lfanew);

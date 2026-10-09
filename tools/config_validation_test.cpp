@@ -5,10 +5,10 @@
 #include <array>
 #include <cstdio>
 #include <string>
+#include <atomic>
+#include <thread>
 
-// Exercise Config.cpp directly, including ReadConfig and generic getters.
-// The logger normally invokes ReadConfig once under its initialization lock.
-namespace vt::Log { void Init() {} }
+// Link configuration alone: loading and querying it requires no logger stub.
 namespace
 {
 int failures = 0;
@@ -50,6 +50,22 @@ struct Ini
         Check(WritePrivateProfileStringA("VectorText", key, value, path.c_str()) != FALSE, "INI test value written");
     }
 };
+void Initialization(Ini &ini)
+{
+    ini.Set("Gamma", "1.25");
+    std::atomic<int> valid{0};
+    std::array<std::thread, 8> readers;
+    for (auto &reader : readers)
+        reader = std::thread([&] {
+            for (int i = 0; i < 100; ++i)
+                if (vt::Cfg::Gamma() == 1.25) ++valid;
+        });
+    for (auto &reader : readers) reader.join();
+    Check(valid == 800, "concurrent first readers see a fully initialized configuration");
+    ini.Set("Gamma", "2.5");
+    vt::Cfg::Load();
+    Check(vt::Cfg::Gamma() == 1.25, "named getters retain the once-loaded configuration");
+}
 void BooleanOptions(Ini &ini)
 {
     const auto expect = [&](const char *text, bool value) {
@@ -125,7 +141,7 @@ void NumberOptions(Ini &ini)
 } // namespace
 int main()
 {
-    ParserEdges(); Ini ini; BooleanOptions(ini); NumberOptions(ini);
+    ParserEdges(); Ini ini; Initialization(ini); BooleanOptions(ini); NumberOptions(ini);
     std::printf("config validation: %d failures\n", failures);
     return failures ? 1 : 0;
 }

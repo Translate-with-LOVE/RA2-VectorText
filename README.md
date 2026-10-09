@@ -75,8 +75,8 @@ ctest --preset offline
 | `src/Hooks.cpp`、`src/hooks/` | Syringe ABI、行入口与返回跳板；文本观测、尺寸测量、背景调整分别实现。 |
 | `include/GameAddresses.h`、`src/RuntimeHooks.*`、`RuntimeHookStub.cpp` | 自动选择 RA2/YR 地址表，校验并安装文字 hook；保留寄存器、标志和原生栈约定。 |
 | `src/Takeover.cpp`、`src/takeover/` | 字体初始化与逐字回退；整行排版、只读测量、诊断统计分别实现。 |
-| `src/GlyphSource.*`、`src/glyph/` | 字形缓存入口；字体管理、配置与度量、轮廓调整、覆盖率生成分别实现。 |
-| `src/PixelWriter.*`、`src/PixelPlane.*` | 像素绘制与稀疏文字层。 |
+| `src/GlyphSource.*`、`src/glyph/` | 字形缓存入口；字体资源及缓存失效、配置与度量、完整栅格流水线分别实现。 |
+| `src/PixelWriter.*`、`src/PixelPlane.*`、`src/plane/` | 像素写入、稀疏文字层及按职责拆分的绘制、复制、同步与合成实现。 |
 | `src/Presentation32.cpp`、`src/presentation/` | cnc-ddraw 检测与安装；表面生命周期、GDI/OpenGL/D3D9 后端及 HiDPI 图集分别实现。 |
 | `src/Config.*`、`src/Logger.*` | INI 解析与配置访问；调用日志与摘要输出。 |
 

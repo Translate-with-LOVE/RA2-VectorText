@@ -85,6 +85,7 @@ namespace vt
         // Format the current diagnostic state for the shutdown summary.
         // Already-written PROBE/REFUSE/SKIP records may help if shutdown fails.
         void DiagLine(char* out, int cch);
+        void ShutdownSummary(char* out, int cch); // format only; no initialization or logging
 
         // Logs the first few skip-the-callee operations in full.
         void LogSkip(DWORD entryEsp, DWORD retAddr, DWORD newEsp, int newX, unsigned int ch);

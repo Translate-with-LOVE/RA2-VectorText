@@ -12,6 +12,15 @@
 
 namespace vt
 {
+void GlyphSource::ClearCache()
+{
+    m_cache.clear();
+    m_highCache.clear();
+    m_centerReady = false;
+    CloseFace(&m_highA);
+    CloseFace(&m_highB);
+}
+
 bool GlyphSource::Init(const char *ttfPath, int pixelSize, int weight, int strideBytes, int lines, int baselineRow)
 {
     Shutdown();

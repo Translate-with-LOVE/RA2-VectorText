@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "Logger.h"
 #include "ConfigState.h"
-#include "Takeover.h"
 #include "GameAddresses.h"
 
 #include <stdio.h>
@@ -295,13 +294,12 @@ void Init()
     if (g_ready)
         return;
 
+    Cfg::Load();
     Prepare();
 
     EnterCriticalSection(&g_cs);
     if (!g_ready)
     {
-        GetGameDir();
-        ReadConfig();
         OpenLogFile();
         g_ready = true;
         g_lastFlush = GetTickCount();
@@ -321,25 +319,14 @@ void Init()
     LeaveCriticalSection(&g_cs);
 }
 
-void Shutdown()
+void Shutdown(const char *finalSummary)
 {
     if (!g_ready)
         return;
     EnterCriticalSection(&g_cs);
     WriteSummary(true);
-    if (g_cfgMode == Cfg::Mode_Draw)
-    {
-        unsigned long long drawn = 0, skipped = 0, failed = 0, unknown = 0;
-        Takeover::Stats(&drawn, &skipped, &failed, &unknown);
-        WriteLine(Format(" M1 takeover: drawn=%llu skipped=%llu failed=%llu unknownGlyph=%llu", drawn, skipped, failed,
-                         unknown));
-        WriteLine(Format(" M1 refusals : %s", Takeover::ReasonSummary()));
-        {
-            char diag[256] = {0};
-            Takeover::DiagLine(diag, sizeof(diag));
-            WriteLine(Format(" M1 diagnostics: %s", diag));
-        }
-    }
+    if (g_cfgMode == Cfg::Mode_Draw && finalSummary && *finalSummary)
+        WriteLine(finalSummary);
     if (g_file != INVALID_HANDLE_VALUE)
     {
         CloseHandle(g_file);

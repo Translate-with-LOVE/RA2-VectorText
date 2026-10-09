@@ -27,7 +27,7 @@ namespace Log
 {
 void Prepare();  // DllMain: create the lock only (no file I/O)
 void Init();     // lazy + idempotent; opens the log in *this* process
-void Shutdown(); // final summary + close
+void Shutdown(const char *finalSummary = nullptr); // caller-supplied final summary + close
 bool Enabled();
 bool Detailed();        // false -> counters only
 bool WantBlitDetails(); // BitFont::Blit is per-glyph; off by default

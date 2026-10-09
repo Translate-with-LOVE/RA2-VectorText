@@ -48,18 +48,25 @@ target_compile_options(vt_minhook PRIVATE /W3)
 # supplied by each test where appropriate, so its own sources stay separate.
 add_library(vt_glyphs STATIC
     src/GlyphSource.cpp src/glyph/Fonts.cpp src/glyph/Settings.cpp
-    src/glyph/Raster.cpp src/glyph/Outline.cpp src/glyph/Coverage.cpp
+    src/glyph/Raster.cpp
     src/PixelWriter.cpp)
 target_include_directories(vt_glyphs PUBLIC src include)
 target_link_libraries(vt_glyphs PUBLIC vt_freetype)
 target_compile_options(vt_glyphs PRIVATE /W4)
+add_library(vt_config STATIC src/Config.cpp)
+target_include_directories(vt_config PUBLIC src)
+target_compile_options(vt_config PRIVATE /W4)
 add_library(vt_takeover STATIC
     src/Takeover.cpp src/takeover/LineLayout.cpp src/takeover/Measurement.cpp
-    src/takeover/Diagnostics.cpp src/Config.cpp src/Logger.cpp)
-target_link_libraries(vt_takeover PUBLIC vt_glyphs)
+    src/takeover/Diagnostics.cpp src/Logger.cpp)
+target_link_libraries(vt_takeover PUBLIC vt_glyphs vt_config)
 target_compile_options(vt_takeover PRIVATE /W4)
-add_library(vt_plane STATIC src/PixelPlane.cpp)
-target_link_libraries(vt_plane PUBLIC vt_glyphs)
+# Math depends only on leaf pixel types; no reverse link to the plane or glyphs.
+add_library(vt_plane_math STATIC src/plane/PixelMath.cpp)
+target_compile_options(vt_plane_math PRIVATE /W4)
+add_library(vt_plane STATIC
+    src/PixelPlane.cpp src/plane/Paint.cpp src/plane/Composition.cpp)
+target_link_libraries(vt_plane PUBLIC vt_glyphs PRIVATE vt_plane_math)
 target_compile_options(vt_plane PRIVATE /W4)
 
 # Public entry points stay in the top-level files; private modules own their
@@ -147,7 +154,8 @@ if(BUILD_TESTING)
     vt_test_executable(pixel_contract_test pixel-contract-test tools/pixel_contract_test.cpp)
     target_link_libraries(pixel_contract_test PRIVATE vt_plane)
     vt_test_executable(runtime_transaction_test runtime-transaction-test tools/runtime_transaction_test.cpp src/RuntimeHookStub.cpp)
-    vt_test_executable(config_validation_test config-validation-test tools/config_validation_test.cpp src/Config.cpp)
+    vt_test_executable(config_validation_test config-validation-test tools/config_validation_test.cpp)
+    target_link_libraries(config_validation_test PRIVATE vt_config)
     vt_test_executable(scaled_composition_test scaled-test tools/scaled_composition_test.cpp)
     target_link_libraries(scaled_composition_test PRIVATE vt_plane)
     vt_test_executable(cnc_present_test cnc-test tools/cnc_present_test.cpp

@@ -1,10 +1,111 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
+#include "State.h"
 #include "Atlas.h"
 
 // D3D9 texture promotion, uploads and GPU overlay; restore caller device state.
 namespace vt::Presentation32::detail
 {
+using CreateTexture = HRESULT(WINAPI *)(void *, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, void **, HANDLE *);
+bool OutputScale(const Texture &t, const ScreenVertex (&vertices)[4], float &sx, float &sy)
+{
+    for (const auto &v : vertices)
+        if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.u) || !std::isfinite(v.v))
+            return false;
+    const float sourceW = (vertices[2].u - vertices[0].u) * t.width;
+    const float sourceH = (vertices[0].v - vertices[1].v) * t.height;
+    sx = sourceW > 0 ? (vertices[2].x - vertices[0].x) / sourceW : 0;
+    sy = sourceH > 0 ? (vertices[0].y - vertices[1].y) / sourceH : 0;
+    // Original menus/movies often stretch 800x600 to a widescreen monitor.
+    // AtlasVertices already projects each axis independently; this is still
+    // a valid HiDPI target, even though its two scale factors differ.
+    return std::isfinite(sx) && std::isfinite(sy) && sx > 1.001f && sy > 1.001f;
+}
+bool ResizeAtlas(Texture &t, size_t count)
+{
+    const int cellH=18*t.rasterScale;
+    if (t.overlay && count <= (size_t)t.atlasColumns * (t.atlasHeight / cellH))
+        return true;
+    D3DCAPS9 caps{};
+    if (!t.device || FAILED(t.device->GetDeviceCaps(&caps)))
+        return false;
+    int columns = 0, height = 0, width = 0;
+    if (!AtlasShape(count, caps.MaxTextureWidth, caps.MaxTextureHeight, width, height, columns,t.rasterScale))
+        return false;
+    if (t.overlay && columns == t.atlasColumns && height <= t.atlasHeight)
+        return true;
+    IDirect3DTexture9 *atlas = nullptr;
+    auto create = (CreateTexture)Original(t.device, 23);
+    if (FAILED(create(t.device, width, height, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, (void **)&atlas, nullptr)))
+        return false;
+    if (t.overlay)
+        t.overlay->Release();
+    t.overlay = atlas;
+    t.atlasWidth = width;
+    t.atlasHeight = height;
+    t.atlasColumns = columns;
+    Log::Note("Present32: sparse text atlas %dx%d (%.2f MiB)", width, height, width * height / 262144.0);
+    return true;
+}
+
+bool UploadOverlay(Texture &t, const PixelPlane &plane)
+{
+    auto tiles = plane.TextTiles(true);
+    if (tiles.empty())
+    {
+        // Empty planes have the default density, not a new glyph density.
+        // Hide the draw list while retaining the atlas across caption gaps.
+        t.overlayTiles.clear();
+        return true;
+    }
+    if(t.rasterScale != plane.RasterScale()) {
+        if(t.overlay) { t.overlay->Release();t.overlay=nullptr; }
+        t.overlayTiles.clear();
+        t.rasterScale=plane.RasterScale();
+        Log::Note("Present32: atlas raster=%d (independent outline samples)",t.rasterScale);
+    }
+    if (!ResizeAtlas(t, tiles.size()))
+        return false;
+    D3DLOCKED_RECT lock{};
+    if (FAILED(t.overlay->LockRect(0, &lock, nullptr, D3DLOCK_NO_DIRTY_UPDATE)))
+        return false;
+    // Repack live tiles into a compact atlas. The draw list references only
+    // this upload's cells, so abandoned cells never leave visible trails.
+    PackOverlay(plane, tiles, (uint32_t *)lock.pBits, lock.Pitch / 4, t.atlasColumns,t.rasterScale);
+    if (FAILED(t.overlay->UnlockRect(0)))
+        return false;
+    RECT dirty{0, 0, t.atlasWidth, (LONG)((tiles.size() + t.atlasColumns - 1) / t.atlasColumns) * 18*t.rasterScale};
+    if (FAILED(t.overlay->AddDirtyRect(&dirty)))
+        return false;
+    t.overlayTiles = std::move(tiles);
+    return true;
+}
+
+void AtlasVertices(Texture &t, const ScreenVertex (&quad)[4], float sx, float sy)
+{
+    t.overlayVertices.clear();
+    t.overlayVertices.reserve(t.overlayTiles.size() * 6);
+    const float sl = quad[1].u * t.width, st = quad[1].v * t.height;
+    const float sr = quad[3].u * t.width, sb = quad[0].v * t.height;
+    for (size_t i = 0; i < t.overlayTiles.size(); ++i)
+    {
+        const auto r = t.overlayTiles[i];
+        const float l = std::max((float)r.left, sl), top = std::max((float)r.top, st);
+        const float right = std::min((float)r.right, sr), bottom = std::min((float)r.bottom, sb);
+        if (l >= right || top >= bottom)
+            continue;
+        const int n=t.rasterScale;
+        const int ax = (int)(i % t.atlasColumns) * 34*n + n;
+        const int ay = (int)(i / t.atlasColumns) * 18*n + n;
+        const float x0 = quad[1].x + (l - sl) * sx, x1 = quad[1].x + (right - sl) * sx;
+        const float y0 = quad[1].y + (top - st) * sy, y1 = quad[1].y + (bottom - st) * sy;
+        const float u0 = (ax + (l - r.left) * n) / t.atlasWidth, u1 = (ax + (right - r.left) * n) / t.atlasWidth;
+        const float v0 = (ay + (top - r.top) * n) / t.atlasHeight, v1 = (ay + (bottom - r.top) * n) / t.atlasHeight;
+        const ScreenVertex a{x0, y0, 0, 1, u0, v0}, b{x1, y0, 0, 1, u1, v0}, c{x0, y1, 0, 1, u0, v1},
+            d{x1, y1, 0, 1, u1, v1};
+        t.overlayVertices.insert(t.overlayVertices.end(), {a, b, c, b, d, c});
+    }
+}
 // D3D9: promote cnc-ddraw's RGB565 upload textures to A8R8G8B8 while keeping
 // its staging rectangle 16-bit. Ordinary output composites text during upload;
 // HiDPI uploads the world separately, then draws the 2x text atlas at the actual
@@ -361,3 +462,42 @@ FARPROC ResolveD3D9Create(FARPROC original)
     return (FARPROC)HookCreate9;
 }
 } // namespace vt::Presentation32::detail
+
+#ifdef VT_PRESENT_TEST
+// Exercise the D3D9 quad projection using the same backend implementation.
+namespace vt::Presentation32
+{
+using namespace detail;
+bool TestBuildOverlay(const PixelPlane &plane, float sx, float sy, float offsetX, float offsetY, TestOverlay &output,
+                      const PixelRect *source)
+{
+    output = {};
+    Texture t{};
+    t.width = plane.Width();
+    t.height = plane.Height();
+    t.rasterScale=plane.RasterScale();
+    const auto r = source ? *source : PixelRect{0, 0, t.width, t.height};
+    const float l = offsetX - 0.5f, top = offsetY - 0.5f;
+    const float right = l + (r.right - r.left) * sx, bottom = top + (r.bottom - r.top) * sy;
+    const float u0 = (float)r.left / t.width, v0 = (float)r.top / t.height;
+    const float u1 = (float)r.right / t.width, v1 = (float)r.bottom / t.height;
+    ScreenVertex quad[4]{
+        {l, bottom, 0, 1, u0, v1}, {l, top, 0, 1, u0, v0}, {right, bottom, 0, 1, u1, v1}, {right, top, 0, 1, u1, v0}};
+    float actualX = 0, actualY = 0;
+    if (!OutputScale(t, quad, actualX, actualY))
+        return false;
+    output.point = fabs(actualX - t.rasterScale) < 0.0001f && fabs(actualY - t.rasterScale) < 0.0001f;
+    t.overlayTiles = plane.TextTiles(true);
+    if (!AtlasShape(t.overlayTiles.size(), 4096, 4096, t.atlasWidth, t.atlasHeight, t.atlasColumns,t.rasterScale))
+        return false;
+    output.width = t.atlasWidth;
+    output.height = t.atlasHeight;
+    output.pixels.resize((size_t)output.width * output.height);
+    PackOverlay(plane, t.overlayTiles, output.pixels.data(), output.width, t.atlasColumns,t.rasterScale);
+    AtlasVertices(t, quad, actualX, actualY);
+    for (const auto &v : t.overlayVertices)
+        output.vertices.insert(output.vertices.end(), {v.x, v.y, v.u, v.v});
+    return true;
+}
+}
+#endif

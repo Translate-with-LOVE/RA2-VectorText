@@ -4,9 +4,9 @@
 #include "Config.h"
 #include <windows.h>
 
-// Private INI/logging bridge. ReadConfig runs under Log::Init's existing lock;
-// named rendering getters reuse those cached values. Generic Cfg::Config*
-// queries read the INI separately.
+// Private cached INI values consumed by logging. Production initialization is
+// owned by Cfg::Load; ReadConfig is also exposed to isolated parser tests.
+// Generic Cfg::Config* queries read the INI separately.
 namespace vt::config
 {
 extern bool g_enabled, g_detailed, g_blitDetail;

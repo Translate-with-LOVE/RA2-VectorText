@@ -36,6 +36,7 @@ VT_HOOK_FUNC(VT_Hook_BitFont_Blit)
 
     // Read-only probe: logs each of the first eight distinct BitFont addresses
     // once, including observe mode, to inspect the fields used by takeover.
+    vt::Log::Init(); // First glyph diagnostics precede the per-glyph counter.
     if (vt::Cfg::Probe())
     {
         __try

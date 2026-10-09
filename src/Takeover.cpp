@@ -79,6 +79,7 @@ bool Init()
         return g_ready;
     g_tried = true;
 
+    Log::Init(); // Rendering diagnostics require logging; configuration does not.
     const char *ttf = Cfg::FontFile();
     g_vecMetrics = Cfg::VectorMetrics();
     g_advScale = Cfg::AdvanceScale();

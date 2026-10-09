@@ -26,6 +26,8 @@ static int CheckConfigEncoding(const char* mode)
           vt::Cfg::Probe()==enabled &&
           vt::Cfg::LinearBlend()==enabled && vt::Cfg::Dither()==enabled,
           "cached rendering booleans parse mixed-case true/false, numeric and invalid defaults");
+    CHECK(!vt::Log::Enabled(), "configuration queries do not initialize logging");
+    vt::Log::Init();
     CHECK(vt::Log::Enabled()==enabled && vt::Log::Detailed()==enabled &&
           vt::Log::WantBlitDetails()==(enabled && !invalid),"logging flags use the same boolean parser");
     CHECK(vt::Cfg::ConfigBool("Present32",true)==enabled &&

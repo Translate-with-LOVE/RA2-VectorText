@@ -24,15 +24,6 @@ GlyphSource::~GlyphSource()
     }
 }
 
-void GlyphSource::ClearCache()
-{
-    m_cache.clear();
-    m_highCache.clear();
-    m_centerReady = false;
-    CloseFace(&m_highA);
-    CloseFace(&m_highB);
-}
-
 const GlyphCell *GlyphSource::Get(unsigned int codepoint, int gameAdvance, int phase, int scale1024, int verticalPhase)
 {
     codepoint = RenderCodepoint(codepoint);

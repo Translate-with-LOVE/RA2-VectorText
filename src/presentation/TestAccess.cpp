@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
-#include "Atlas.h"
+#include "State.h"
 
 // Test-only adapters; this translation unit is excluded from the DLL.
 namespace vt::Presentation32
@@ -25,37 +25,6 @@ int TestObservedRaster()
     for(const auto& entry:state->textures)
         if(entry.second.overlayReady && entry.second.cleanWorld) return entry.second.rasterScale;
     return 0;
-}
-bool TestBuildOverlay(const PixelPlane &plane, float sx, float sy, float offsetX, float offsetY, TestOverlay &output,
-                      const PixelRect *source)
-{
-    output = {};
-    Texture t{};
-    t.width = plane.Width();
-    t.height = plane.Height();
-    t.rasterScale=plane.RasterScale();
-    const auto r = source ? *source : PixelRect{0, 0, t.width, t.height};
-    const float l = offsetX - 0.5f, top = offsetY - 0.5f;
-    const float right = l + (r.right - r.left) * sx, bottom = top + (r.bottom - r.top) * sy;
-    const float u0 = (float)r.left / t.width, v0 = (float)r.top / t.height;
-    const float u1 = (float)r.right / t.width, v1 = (float)r.bottom / t.height;
-    ScreenVertex quad[4]{
-        {l, bottom, 0, 1, u0, v1}, {l, top, 0, 1, u0, v0}, {right, bottom, 0, 1, u1, v1}, {right, top, 0, 1, u1, v0}};
-    float actualX = 0, actualY = 0;
-    if (!OutputScale(t, quad, actualX, actualY))
-        return false;
-    output.point = fabs(actualX - t.rasterScale) < 0.0001f && fabs(actualY - t.rasterScale) < 0.0001f;
-    t.overlayTiles = plane.TextTiles(true);
-    if (!AtlasShape(t.overlayTiles.size(), 4096, 4096, t.atlasWidth, t.atlasHeight, t.atlasColumns,t.rasterScale))
-        return false;
-    output.width = t.atlasWidth;
-    output.height = t.atlasHeight;
-    output.pixels.resize((size_t)output.width * output.height);
-    PackOverlay(plane, t.overlayTiles, output.pixels.data(), output.width, t.atlasColumns,t.rasterScale);
-    AtlasVertices(t, quad, actualX, actualY);
-    for (const auto &v : t.overlayVertices)
-        output.vertices.insert(output.vertices.end(), {v.x, v.y, v.u, v.v});
-    return true;
 }
 void TestCpuTextStart()
 {

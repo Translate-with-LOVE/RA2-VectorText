@@ -48,9 +48,9 @@ Syringe hook 在 `Hooks.cpp` 和 `hooks/` 中读取原生参数，调用 `Takeov
 每个线程的行计划由布局模块持有，待消费的背景、tooltip 和宽度测量由 hook 测量模块持有。
 私有头文件只连接这些实现单元，不提供另一套渲染算法。
 
-`GlyphSource.cpp` 管理缓存和访问锁；`glyph/Fonts.cpp` 管理 FreeType 库、字体与字号，
+`GlyphSource.cpp` 管理缓存访问和栅格请求；`glyph/Fonts.cpp` 管理 FreeType 库、字体、字号及缓存失效，
 `Settings.cpp` 处理栅格设置、旧码位映射、字体选择和 kerning。
-缓存未命中时，`Raster.cpp` 加载字形并串联 `Outline.cpp` 的轮廓调整与 `Coverage.cpp` 的位图生成。
+缓存未命中时，`Raster.cpp` 完成加载字形、轮廓调整和位图生成这一条完整流水线。
 逻辑覆盖率和可选 2～8× 字形使用同一次轮廓调整结果，各自保留对应采样网格的 hinting。
 缓存及 FreeType face 仍由 `GlyphSource` 统一持有；栅格化各步骤在同一把锁内完成。
 
@@ -58,6 +58,16 @@ Syringe hook 在 `Hooks.cpp` 和 `hooks/` 中读取原生参数，调用 `Takeov
 `presentation/State.cpp` 登记的 writer，向 `PixelPlane` 稀疏文字层记录覆盖率。
 `Surfaces.cpp` 跟踪 DirectDraw 表面和加载界面的 BSurface，负责复制、填充、清除与销毁时的文字层同步。
 加载界面的内存表面和游戏内显示表面保持各自的登记与复制路径。
+
+`PixelPlane.cpp` 管理文字层生命周期和稀疏块，集中实现清除、复制与原生像素同步，
+这些操作共同维护文字层内容、原生标记和修改代次；所有可变状态仍由同一个 `PixelPlane` 持有。
+`plane/Paint.cpp` 消费字形覆盖率，负责文字及字幕描边写入；`Composition.cpp` 将已有文字层输出为
+矩形 BGRA8、缩放合成和透明叠加图像，并统一矩形参数验证与文字块查询。
+`PixelPlaneTypes.h` 只定义像素数据，不依赖文字层类或字形模块；`PixelPlane.h` 对 `GlyphCell` 使用前置声明。
+私有 `plane/PixelMath.h` 仅依赖这些叶子类型，`PixelMath.cpp` 独立构建为 `vt_plane_math`，
+集中实现颜色表、像素透明度混合与背景合成等纯计算。
+绘制和输出依赖文字层存储操作，存储操作只调用底层数学函数；数学模块不反向调用文字层或字形模块，
+也不持有文字层可变状态。颜色查找表仍只有一份实例。
 
 | 呈现实现 | 边界 |
 | --- | --- |
@@ -67,12 +77,15 @@ Syringe hook 在 `Hooks.cpp` 和 `hooks/` 中读取原生参数，调用 `Takeov
 | `presentation/Gdi.cpp` | BGRA8 DIB 转换；先缩放背景，再在输出网格软件合成高密度文字，一次提交最终画面。 |
 | `presentation/OpenGL.cpp`、`GlOverlay.*`、`GlApi.h` | BGRA8 上传与帧快照；稀疏文字图集在最终 OpenGL 画面独立合成，恢复原状态。 |
 | `presentation/D3d9.cpp` | D3D9 纹理接管、上传、GPU 合成和设备状态恢复。 |
-| `presentation/Atlas.*` | 高分辨率稀疏图集、边界采样和实际视口倍率计算。 |
+| `presentation/Atlas.*` | 后端无关的稀疏图集布局、边界采样及像素打包；D3D9 纹理操作和四边形投影由 `D3d9.cpp` 管理。 |
 | `presentation/TestAccess.cpp` | 测试适配器；只编入显示测试，不进入 DLL。 |
 
 `Config.cpp` 负责 INI 解析与 `Cfg` 访问器，`Logger.cpp` 负责记录调用及输出摘要。
-配置仍通过日志的现有初始化锁延迟加载；通用配置查询保留原读取时机，布尔解析及默认值不因拆分改变。
-CMake 分别构建字形、布局/配置、文字层静态库，DLL 和显示测试使用同一份呈现源文件列表。
+配置通过 `std::call_once` 独立延迟加载，日志消费已加载的配置；通用配置查询仍逐次读取 INI。
+DLL 退出入口汇总渲染诊断并交给日志写入，日志模块不反向调用渲染模块。
+呈现状态只提供共享状态和基础操作，主表面查询归属 `Surfaces.cpp`，避免状态与表面实现互相调用。
+CMake 分别构建字形、配置、布局/日志和文字层静态库，配置测试只链接配置库。
+DLL 和显示测试使用同一份呈现源文件列表，D3D9 投影测试适配器直接使用后端实现。
 FreeType、MinHook 都使用固定提交的 submodule；自有代码的格式规则在 `.clang-format` 中。
 
 ## 渲染流程

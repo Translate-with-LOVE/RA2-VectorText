@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 VectorText contributors
 // SPDX-License-Identifier: GPL-3.0-only
 #include "PixelPlane.h"
+#include "GlyphSource.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
