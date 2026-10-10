@@ -113,9 +113,13 @@ D3D9 的一次性启动图在首次呈现时直接建立高清文字图集，GDI
 | `FitToAdvance` | `true` | 逐字路径按指定字宽限制字形，避免溢出旧字格；自然单行布局保留字体比例。`Metrics=vector` 不启用此限制。 |
 | `FontFile` | `C:\Windows\Fonts\NotoSerifSC-VF.ttf` | 主字体文件路径，用于中文及相应标点；未指定独立英文字体时也用于英文。文件需在本机存在。 |
 | `FontFileLatin` | 空 | 独立英文、数字及常用半角符号字体；为空或加载失败时使用主字体。 |
-| `FontWeight` | `400` | 可变字体的 `wght` 字重轴值，字体需支持该轴。固定字体的字重由文件决定，不会据此改变 Arial 常规体。 |
+| `FontFileSymbol` | 空 | 独立 Unicode 符号字体，如 `C:\Windows\Fonts\seguisym.ttf`。优先用于闪电、矿镐、时钟、箭头、数学及装饰符号；ASCII 和中文标点保留原字体。为空、加载失败或缺字时沿用原字体及点阵回退。 |
+| `FontSizeSymbol` | `13` | 独立符号字号，最小 6px；不跟随英文或中文字号。与文字共用基线，HiDPI 同样生成 2～8× 字形。 |
+| `FontWeight` | `400` | 主字体 `FontFile` 的可变 `wght` 字重轴值；不影响独立英文或符号字体。大于零时限制在字体支持的轴范围内，非正值保留字体默认字重。固定字体字重由文件决定。 |
+| `FontWeightLatin` | `400` | 独立英文字重，规则同 `FontWeight`；`FontFileLatin` 留空或加载失败时，也以此字重加载主字体供英文使用。 |
+| `FontWeightSymbol` | `400` | 独立符号字重，规则同 `FontWeight`；仅用于配置成功且含对应字形的符号字体。 |
 | `FontSizeLatin` | `13` | 英文字体字号，最小 6px。HiDPI 按独立的 2～8× 字形密度栅格化，逻辑字号不变。 |
-| `FontSizeCJK` | `16` | 中文及相应标点字号，最小 6px。与英文独立设置，共享基线。 |
+| `FontSize` | `16` | 主字体 `FontFile` 的字号，当前用于中文及相应标点，最小 6px。与英文、符号独立设置，共享基线。 |
 | `BaselineRow` | `13` | 相对游戏传入 Y 的共同基线位置，限制为 1～32；增大会整体下移文字，不会逐字按轮廓对齐。 |
 | `Supersample` | `2` | 1～4 倍栅格化后降采样；`1` 直接在目标像素网格栅格化。较高值会改变 hinting 网格并增加开销，与 HiDPI 输出倍率是独立选项。 |
 | `Hinting` | `0` | 灰度栅格对齐：`0` 轻量纵向对齐（LIGHT），`1` 完整对齐（NORMAL），`2` 不对齐；其他值回到 LIGHT。关闭抗锯齿时使用 MONO。 |

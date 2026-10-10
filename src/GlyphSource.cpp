@@ -5,7 +5,7 @@
 namespace vt
 {
 GlyphSource::GlyphSource()
-    : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_sizeLatin(13), m_sizeCJK(16), m_cjkFrom(0x2E80u), m_stride(3),
+    : m_lib(NULL), m_faceA(NULL), m_faceB(NULL), m_sizeLatin(13), m_sizeMain(16), m_cjkFrom(0x2E80u), m_stride(3),
       m_lines(16), m_baseline(13), m_fit(true), m_aa(false), m_darkening(0), m_ss(1), m_hinting(0), m_darkErr{0, 0, 0},
       m_path(NULL), m_weight(400), m_csInit(false)
 {

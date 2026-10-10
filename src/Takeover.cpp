@@ -112,18 +112,27 @@ bool Init()
         g_ready = false;
         return false;
     }
-    g_src.SetSizes(Cfg::FontSizeLatin(), Cfg::FontSizeCJK());
+    g_src.SetSizes(Cfg::FontSizeLatin(), Cfg::FontSize());
     static char latinFont[MAX_PATH] = {0};
     Cfg::ConfigStr("FontFileLatin", "", latinFont, sizeof(latinFont));
-    if (latinFont[0])
-        Log::Note("Latin font %s: \"%s\"", g_src.SetLatinFont(latinFont) ? "ready" : "fallback", latinFont);
+    const bool latinReady = g_src.SetLatinFont(latinFont, Cfg::FontWeightLatin());
+    if (!latinReady)
+        g_src.SetLatinFont("", Cfg::FontWeightLatin());
+    Log::Note("Latin font %s: \"%s\" weight=%d", latinReady ? "ready" : "fallback",
+              latinFont[0] ? latinFont : ttf, Cfg::FontWeightLatin());
+    static char symbolFont[MAX_PATH] = {0};
+    Cfg::ConfigStr("FontFileSymbol", "", symbolFont, sizeof(symbolFont));
+    if (symbolFont[0])
+        Log::Note("Symbol font %s: \"%s\" size=%dpx weight=%d",
+                  g_src.SetSymbolFont(symbolFont, Cfg::FontSizeSymbol(), Cfg::FontWeightSymbol()) ? "ready" : "fallback",
+                  symbolFont, Cfg::FontSizeSymbol(), Cfg::FontWeightSymbol());
     g_ready = true;
     Log::Note("Text options: LegacyCodepage1252=%s HiDPI=%s", Cfg::LegacyCodepage1252() ? "true" : "false",
               Cfg::HiDPI() ? "true" : "false");
     SetStage(2);
 
-    Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx cjk=%dpx wght=%d baseline=%d fit=%d aa=%d hinting=%d",
-              GetTickCount() - t0, ttf, Cfg::FontSizeLatin(), Cfg::FontSizeCJK(), Cfg::FontWeight(), Cfg::BaselineRow(),
+    Log::Note("M1 font ready in %u ms: \"%s\" latin=%dpx main=%dpx wght=%d baseline=%d fit=%d aa=%d hinting=%d",
+              GetTickCount() - t0, ttf, Cfg::FontSizeLatin(), Cfg::FontSize(), Cfg::FontWeight(), Cfg::BaselineRow(),
               Cfg::FitToAdvance() ? 1 : 0, useAA ? 1 : 0, Cfg::ConfigInt("Hinting", 0));
     return true;
 }

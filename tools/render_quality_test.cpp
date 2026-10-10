@@ -281,10 +281,11 @@ int main(int argc, char** argv) {
     glyphs.SetAntiAlias(true); glyphs.SetSupersample(vt::Cfg::Supersample());
     glyphs.SetHinting(vt::Cfg::ConfigInt("Hinting", 0));
     glyphs.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
-    glyphs.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSizeCJK());
+    glyphs.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSize());
     char latinFont[MAX_PATH] = {};
     vt::Cfg::ConfigStr("FontFileLatin", "", latinFont, sizeof(latinFont));
-    if (latinFont[0] && !glyphs.SetLatinFont(latinFont)) ++fails;
+    if (!glyphs.SetLatinFont(latinFont, vt::Cfg::FontWeightLatin()))
+        glyphs.SetLatinFont("", vt::Cfg::FontWeightLatin());
     if (glyphs.FaceHandleFor(0x2014) != glyphs.FaceHandleFor(0x4E2D) ||
         glyphs.FaceHandleFor(0x201C) != glyphs.FaceHandleFor(0x4E2D) ||
         glyphs.FaceHandleFor('.') != glyphs.FaceHandle()) {
@@ -301,8 +302,9 @@ int main(int argc, char** argv) {
     vt::GlyphSource metrics;
     metrics.SetAntiAlias(true); metrics.SetSupersample(1);
     metrics.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
-    metrics.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSizeCJK());
-    if (latinFont[0]) metrics.SetLatinFont(latinFont);
+    metrics.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSize());
+    if (!metrics.SetLatinFont(latinFont, vt::Cfg::FontWeightLatin()))
+        metrics.SetLatinFont("", vt::Cfg::FontWeightLatin());
     const wchar_t* metricSample = L"AVWim0g\x4E2D\x56FD\x3002";
     for (const wchar_t* p = metricSample; *p; ++p) {
         metrics.SetSupersample(1); metrics.SetHinting(0);

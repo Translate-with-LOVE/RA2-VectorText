@@ -68,9 +68,15 @@ static unsigned int __stdcall ThreadProbe(void*)
 #include "dimension_machine_check.h"
 #include "runtime_stub_check.h"
 #include "config_encoding_check.h"
+#include "symbol_font_check.h"
+#include "font_weight_check.h"
 
 int main(int argc, char** argv)
 {
+    const bool symbols = argc > 1 && !strcmp(argv[1], "--symbols");
+    const bool weights = argc > 1 && !strcmp(argv[1], "--font-weights");
+    if (symbols && !WriteSymbolConfig()) return 2;
+    if (weights && !WriteWeightConfig()) return 2;
     if (argc>2 && !strcmp(argv[1],"--config-encoding")) return CheckConfigEncoding(argv[2]);
     if (argc > 1 && !strcmp(argv[1], "--ra2"))
     {
@@ -94,6 +100,8 @@ int main(int argc, char** argv)
     *(unsigned short*)(font + 36) = 0x07FF; *(int*)(font + 40) = 32; *(int*)(font + 44) = 1;
     *(int*)(font + 56) = W - 1; *(int*)(font + 60) = H - 1;
     CHECK(vt::Takeover::LineEnabled(), "line mode enabled in installed test INI");
+    if (symbols) return CheckSymbolFont();
+    if (weights) return CheckFontWeights();
     vt::Takeover::LineInfo info, before;
     const wchar_t* text = L"AVATAR Mix (中文), 50%.";
     Clear();
@@ -139,10 +147,11 @@ int main(int argc, char** argv)
     vt::GlyphSource verticalReference;
     verticalReference.SetAntiAlias(true); verticalReference.SetSupersample(vt::Cfg::Supersample());
     verticalReference.Init(vt::Cfg::FontFile(), vt::Cfg::FontSizeLatin(), vt::Cfg::FontWeight(), 3, 16, vt::Cfg::BaselineRow());
-    verticalReference.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSizeCJK());
+    verticalReference.SetSizes(vt::Cfg::FontSizeLatin(), vt::Cfg::FontSize());
     char latinPath[MAX_PATH] = {};
     vt::Cfg::ConfigStr("FontFileLatin", "", latinPath, sizeof(latinPath));
-    if (latinPath[0]) verticalReference.SetLatinFont(latinPath);
+    if (!verticalReference.SetLatinFont(latinPath, vt::Cfg::FontWeightLatin()))
+        verticalReference.SetLatinFont("", vt::Cfg::FontWeightLatin());
     // Reference outline centres choose one shared Latin baseline. The actual
     // row must shift letters, descenders and symbols together, without moving
     // Chinese or applying this adjustment to a single-script row.

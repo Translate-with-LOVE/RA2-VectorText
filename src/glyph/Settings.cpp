@@ -110,6 +110,25 @@ bool GlyphSource::UsesCJKFace(unsigned int cp) const
            cp == 0x2025 || cp == 0x2026;
 }
 
+bool GlyphSource::UsesSymbolFace(unsigned int cp) const
+{
+    // Route Unicode symbol blocks, not ASCII punctuation or CJK typography.
+    // Explicit blocks keep Phobos icons consistent on Windows 7, whose NLS
+    // symbol classification predates some of these characters.
+    const bool symbol = (cp >= 0x20A0 && cp <= 0x20CF) || (cp >= 0x2100 && cp <= 0x214F) ||
+                        (cp >= 0x2190 && cp <= 0x2BFF) || (cp >= 0xA2 && cp <= 0xA9) ||
+                        cp == 0xAE || cp == 0xB0 || cp == 0xB1 || cp == 0xD7 || cp == 0xF7;
+    return symbol && m_faceSymbol && FT_Get_Char_Index((FT_Face)m_faceSymbol, cp) != 0;
+}
+
+void *GlyphSource::FaceHandleFor(unsigned int cp) const
+{
+    cp = RenderCodepoint(cp);
+    if (UsesSymbolFace(cp))
+        return m_faceSymbol;
+    return UsesCJKFace(cp) && m_faceB ? m_faceB : m_faceA;
+}
+
 int GlyphSource::KerningQuarter(unsigned int left, unsigned int right)
 {
     left = RenderCodepoint(left);

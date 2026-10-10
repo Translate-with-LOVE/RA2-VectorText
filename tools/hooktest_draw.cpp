@@ -114,7 +114,7 @@ static void WriteIni(const char* mode)
     if (!f) return;
     fprintf(f, "[VectorText]\nEnabled=1\nMode=%s\nAntiAlias=1\n"
                "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
-               "FontWeight=400\nFontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n"
+               "FontWeight=400\nFontSizeLatin=13\nFontSize=16\nBaselineRow=13\nFitToAdvance=1\n"
                "Metrics=scaled\nAdvanceScale=1.05\n",
             mode);
     fclose(f);

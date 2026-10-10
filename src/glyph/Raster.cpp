@@ -212,10 +212,13 @@ void GlyphSource::BuildHighResolution(unsigned int codepoint, int gameAdvance, u
     if (m_highResolution)
     {
         const int scale = m_highScale;
-        const bool cjk = UsesCJKFace(codepoint) && m_faceB;
-        void **high = cjk ? &m_highB : &m_highA;
+        const bool symbol = context.face == m_faceSymbol;
+        const bool cjk = !symbol && context.face == m_faceB;
+        void **high = symbol ? &m_highSymbol : (cjk ? &m_highB : &m_highA);
         if (!*high)
-            *high = OpenFace((cjk ? m_sizeCJK : m_sizeLatin) * scale, cjk ? NULL : (m_latinPath[0] ? m_latinPath : NULL));
+            *high = OpenFace((symbol ? m_sizeSymbol : (cjk ? m_sizeMain : m_sizeLatin)) * scale,
+                             symbol ? m_symbolPath : (cjk ? NULL : (m_latinPath[0] ? m_latinPath : NULL)),
+                             symbol ? m_weightSymbol : (cjk ? m_weight : m_weightLatin));
         FT_Face hf = (FT_Face)*high;
         FT_Vector hd = {delta.x * scale / m_ss, delta.y * scale / m_ss};
         if (hf)

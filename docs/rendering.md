@@ -144,18 +144,36 @@ game.fnt 字符索引、引擎原步进和显现循环保留原值；含旧码�
 
 ### 位图图标与矢量文字混排
 
+`FontFileSymbol` 可单独指定符号字体，`FontSizeSymbol` 单独控制其字号（默认 13px，最小 6px），
+与中英文字体共用 `BaselineRow`，字号互不跟随。配置为空时保留原行为；例如：
+
+```ini
+FontFileSymbol=C:\Windows\Fonts\seguisym.ttf
+FontSizeSymbol=13
+```
+
+符号字体优先用于 U+20A0–20CF、U+2100–214F、U+2190–2BFF，以及 U+00A2–00A9、
+U+00AE、U+00B0、U+00B1、U+00D7、U+00F7。包含电力、矿镐、时钟、箭头、数学和装饰符号；
+ASCII 字符、中英文标点与中文字仍使用原字体。符号字体加载失败或没有对应字形时，
+继续使用原 Latin/CJK 字体，原字体也缺字时保留游戏点阵。符号与其 HiDPI 字形使用同一字体和字号。
+
 矢量字体缺字而游戏字体有有效位图时，同一行保留原图标、尺寸和步进，其余文字继续自然排版。
 当前回退格式是 16 行、每行 3 字节、每字形 49 字节的 MSB-first 1bpp 点阵。
 位图图标不做缩放；整行必须缩小时回退。
 
-电力闪电 U+26A1 与矿车镐 U+26CF 使用这条通用路径，ASCII 数字、正负号和斜杠
+未配置可用符号字体时，电力闪电 U+26A1 与矿车镐 U+26CF 使用这条通用路径，ASCII 数字、正负号和斜杠
 仍使用 Arial 13px 的自然 advance。绘制和测量共用布局，无需识别计数器字符串或外部 DLL。
 回归覆盖 `⚡+1710`、`⚡-1000`、`⛏2/2`、`⛏10/12`，与原位图图标加独立自然排版数字逐像素比较。
 
 ## 统一基线与画质
 
 默认中文为 `NotoSansSC-VF.ttf` 16px、可变字重 450，英文为 `arial.ttf` 13px 常规体。
-固定字体的字重由文件决定，`FontWeight` 不改变 Arial 的字重。
+主字体使用 `FontFile`、`FontSize`、`FontWeight`；英文使用 `FontFileLatin`、`FontSizeLatin`、
+`FontWeightLatin`；符号使用 `FontFileSymbol`、`FontSizeSymbol`、`FontWeightSymbol`。
+三套字号与字重独立设置，共享基线。`FontSizeCJK` 已删除，不作为 `FontSize` 的兼容别名。
+英文字体未指定或加载失败时，使用主字体文件，但仍应用独立英文字号和字重。
+可变字体字重限制到其 `wght` 轴范围，非正值保留字体默认字重；其他可变轴保留默认值。
+固定字体的字重由文件决定，字重选项不会把 Arial 或 Segoe UI Symbol 常规体模拟成粗体。
 
 `BaselineRow=13` 是相对于游戏传入 Y 的共同基线位置；字形顶点由 FreeType 纵向轴承决定。
 中英文、数字、符号不会根据各自轮廓边界上下补偿。缓存记录 `inkY` 和实际位图行数，

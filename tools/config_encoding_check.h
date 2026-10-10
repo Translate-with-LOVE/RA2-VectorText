@@ -16,7 +16,7 @@ static int CheckConfigEncoding(const char* mode)
         "Mode=draw\nFitToAdvance=%s\nAntiAlias=%s\nProbe=%s\n"
         "LinearBlend=%s\nDither=%s\nLineRender=%s\nDynamicTextWidth=%s\nPresent32=%s\nSubpixel=%s\n"
         "FontFile=C:\\Windows\\Fonts\\NotoSansSC-VF.ttf\nFontFileLatin=C:\\Windows\\Fonts\\arial.ttf\n"
-        "FontSizeLatin=13\nFontSizeCJK=16\nSupersample=1\n"
+        "FontSizeLatin=13\nFontSize=16\nSupersample=1\n"
         "BoolYes=YeS\nBoolOff=oFf\nBoolOne=1\nBoolZero=0\nBoolInvalid=not-a-bool\n",
         value,value,value,value,value,value,value,value,value,value,value,value);
     if (!missing) fprintf(ini,"LegacyCodepage1252=%s\nHiDPI=%s\n",value,value);
@@ -42,7 +42,7 @@ static int CheckConfigEncoding(const char* mode)
     CHECK(vt::Cfg::HiDPI()==enabled,
           "HiDPI uses the new boolean; absent/invalid values preserve its enabled default");
     CHECK(vt::Cfg::LegacyCodepage1252()==enabled,"legacy codepage switch defaults on and supports strict Unicode mode");
-    CHECK(vt::Cfg::FontSizeCJK()==16 && vt::Cfg::Supersample()==1,
+    CHECK(vt::Cfg::FontSize()==16 && vt::Cfg::Supersample()==1,
           "numeric font and sampling options retain integer semantics");
 
     vt::GlyphSource source;

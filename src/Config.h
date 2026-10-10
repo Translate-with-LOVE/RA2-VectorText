@@ -18,8 +18,11 @@ void Load(); // idempotent; called by named rendering getters
 int Mode();
 const char *FontFile();
 int FontWeight();
+int FontWeightLatin();
+int FontWeightSymbol();
 int FontSizeLatin();
-int FontSizeCJK();
+int FontSizeSymbol();
+int FontSize();
 int BaselineRow();
 bool FitToAdvance();
 bool AntiAlias();

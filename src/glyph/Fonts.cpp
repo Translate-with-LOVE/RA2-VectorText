@@ -19,6 +19,7 @@ void GlyphSource::ClearCache()
     m_centerReady = false;
     CloseFace(&m_highA);
     CloseFace(&m_highB);
+    CloseFace(&m_highSymbol);
 }
 
 bool GlyphSource::Init(const char *ttfPath, int pixelSize, int weight, int strideBytes, int lines, int baselineRow)
@@ -29,10 +30,12 @@ bool GlyphSource::Init(const char *ttfPath, int pixelSize, int weight, int strid
     m_lines = lines;
     m_baseline = baselineRow;
     m_sizeLatin = pixelSize;
-    m_sizeCJK = pixelSize;
+    m_sizeMain = pixelSize;
     m_path = ttfPath;
     m_latinPath[0] = 0;
+    m_symbolPath[0] = 0;
     m_weight = weight;
+    m_weightLatin = weight;
 
     FT_Library lib = NULL;
     if (FT_Init_FreeType(&lib))
@@ -49,7 +52,7 @@ bool GlyphSource::Init(const char *ttfPath, int pixelSize, int weight, int strid
     }
 
     m_ss = (m_ss < 1) ? 1 : (m_ss > 4 ? 4 : m_ss);
-    m_faceA = OpenFace(pixelSize * m_ss);
+    m_faceA = OpenFace(pixelSize * m_ss, nullptr, m_weight);
     if (!m_faceA)
     {
         FT_Done_FreeType(lib);
@@ -68,6 +71,8 @@ bool GlyphSource::Init(const char *ttfPath, int pixelSize, int weight, int strid
 
 void GlyphSource::Shutdown()
 {
+    CloseFace(&m_highSymbol);
+    CloseFace(&m_faceSymbol);
     CloseFace(&m_highB);
     CloseFace(&m_highA);
     CloseFace(&m_faceB);
@@ -85,7 +90,7 @@ void GlyphSource::Shutdown()
     }
 }
 
-void *GlyphSource::OpenFace(int pixelSize, const char *path)
+void *GlyphSource::OpenFace(int pixelSize, const char *path, int weight)
 {
     if (!m_lib || !m_path)
         return NULL;
@@ -96,7 +101,7 @@ void *GlyphSource::OpenFace(int pixelSize, const char *path)
 
     // Apply the configured wght coordinate when the variable face has that
     // axis; leave other axes at their defaults. Static faces have no axes.
-    if (m_weight > 0 && FT_HAS_MULTIPLE_MASTERS(face))
+    if (weight > 0 && FT_HAS_MULTIPLE_MASTERS(face))
     {
         FT_MM_Var *mm = NULL;
         if (!FT_Get_MM_Var(face, &mm))
@@ -110,7 +115,11 @@ void *GlyphSource::OpenFace(int pixelSize, const char *path)
                     const unsigned int t = mm->axis[a].tag;
                     char tag[5] = {(char)(t >> 24), (char)(t >> 16), (char)(t >> 8), (char)t, 0};
                     if (!strcmp(tag, "wght"))
-                        coords[a] = m_weight << 16;
+                    {
+                        const auto requested = (long long)weight * 65536;
+                        coords[a] = (FT_Fixed)(requested < mm->axis[a].minimum ? mm->axis[a].minimum :
+                                              requested > mm->axis[a].maximum ? mm->axis[a].maximum : requested);
+                    }
                 }
                 FT_Set_Var_Design_Coordinates(face, mm->num_axis, coords);
                 free(coords);
@@ -136,12 +145,12 @@ void GlyphSource::CloseFace(void **face)
     }
 }
 
-void GlyphSource::SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom)
+void GlyphSource::SetSizes(int latinPx, int mainPx, unsigned int cjkFrom)
 {
     if (latinPx > 0)
         m_sizeLatin = latinPx;
-    if (cjkPx > 0)
-        m_sizeCJK = cjkPx;
+    if (mainPx > 0)
+        m_sizeMain = mainPx;
     m_cjkFrom = cjkFrom;
 
     if (!m_faceA)
@@ -149,11 +158,11 @@ void GlyphSource::SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom)
 
     if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
         return;
-    if (m_sizeCJK == m_sizeLatin && !m_latinPath[0])
+    if (m_sizeMain == m_sizeLatin && !m_latinPath[0] && m_weightLatin == m_weight)
         CloseFace(&m_faceB);
     else if (!m_faceB)
-        m_faceB = OpenFace(m_sizeCJK * m_ss);
-    else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)(m_sizeCJK * m_ss)))
+        m_faceB = OpenFace(m_sizeMain * m_ss, nullptr, m_weight);
+    else if (FT_Set_Pixel_Sizes((FT_Face)m_faceB, 0, (FT_UInt)(m_sizeMain * m_ss)))
         return;
 
     if (m_csInit)
@@ -164,15 +173,15 @@ void GlyphSource::SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom)
     }
 }
 
-bool GlyphSource::SetLatinFont(const char *path)
+bool GlyphSource::SetLatinFont(const char *path, int weight)
 {
-    if (!m_faceA || !path || !*path)
+    if (!m_faceA || !path)
         return false;
-    void *latin = OpenFace(m_sizeLatin * m_ss, path);
+    void *latin = OpenFace(m_sizeLatin * m_ss, path, weight);
     if (!latin)
         return false;
     if (!m_faceB)
-        m_faceB = OpenFace(m_sizeCJK * m_ss);
+        m_faceB = OpenFace(m_sizeMain * m_ss, nullptr, m_weight);
     if (!m_faceB)
     {
         CloseFace(&latin);
@@ -181,8 +190,30 @@ bool GlyphSource::SetLatinFont(const char *path)
     EnterCriticalSection(&m_cs);
     CloseFace(&m_faceA);
     m_faceA = latin;
+    m_weightLatin = weight;
     strncpy_s(m_latinPath, path, _TRUNCATE);
     ClearCache();
+    LeaveCriticalSection(&m_cs);
+    return true;
+}
+
+bool GlyphSource::SetSymbolFont(const char *path, int pixelSize, int weight)
+{
+    if (!m_faceA || !path || pixelSize < 1)
+        return false;
+    EnterCriticalSection(&m_cs);
+    void *symbol = *path ? OpenFace(pixelSize * m_ss, path, weight) : nullptr;
+    if (*path && !symbol)
+    {
+        LeaveCriticalSection(&m_cs);
+        return false;
+    }
+    ClearCache();
+    CloseFace(&m_faceSymbol);
+    m_faceSymbol = symbol;
+    m_sizeSymbol = pixelSize;
+    m_weightSymbol = weight;
+    strncpy_s(m_symbolPath, path, _TRUNCATE);
     LeaveCriticalSection(&m_cs);
     return true;
 }
@@ -201,8 +232,10 @@ void GlyphSource::SetSupersample(int ss)
     CloseFace(&m_faceB);
     if (FT_Set_Pixel_Sizes((FT_Face)m_faceA, 0, (FT_UInt)(m_sizeLatin * m_ss)))
         return;
-    if (m_sizeCJK != m_sizeLatin || m_latinPath[0])
-        m_faceB = OpenFace(m_sizeCJK * m_ss);
+    if (m_sizeMain != m_sizeLatin || m_latinPath[0] || m_weightLatin != m_weight)
+        m_faceB = OpenFace(m_sizeMain * m_ss, nullptr, m_weight);
+    if (m_faceSymbol)
+        FT_Set_Pixel_Sizes((FT_Face)m_faceSymbol, 0, (FT_UInt)(m_sizeSymbol * m_ss));
     if (m_csInit)
     {
         EnterCriticalSection(&m_cs);

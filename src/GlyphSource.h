@@ -48,12 +48,16 @@ class GlyphSource
               int baselineRow = 13);
     void Shutdown();
 
-    // Configure Latin and CJK pixel sizes independently. Codepoints at or
-    // above cjkFrom use the CJK face; default U+2E80 is CJK radicals supplement.
-    void SetSizes(int latinPx, int cjkPx, unsigned int cjkFrom = 0x2E80);
+    // Configure Latin and main-font pixel sizes independently. Codepoints at
+    // or above cjkFrom use the main face; default U+2E80 is CJK radicals supplement.
+    void SetSizes(int latinPx, int mainPx, unsigned int cjkFrom = 0x2E80);
     // Optional Latin face chosen for the game's narrow ASCII advances.
-    // The CJK face stays on FontFile; fitting is controlled separately.
-    bool SetLatinFont(const char *path);
+    // Empty path uses FontFile with independent weight. The main face keeps
+    // its own weight; fitting is controlled separately.
+    bool SetLatinFont(const char *path, int weight = 400);
+    // Optional Unicode symbol face; an empty path disables it. Missing
+    // symbols keep the normal Latin/CJK selection and native bitmap fallback.
+    bool SetSymbolFont(const char *path, int pixelSize = 13, int weight = 400);
     void SetLegacyCodepage1252(bool on);
     unsigned int RenderCodepoint(unsigned int cp) const;
 
@@ -84,10 +88,7 @@ class GlyphSource
 
     bool Ready() const { return m_faceA != NULL; }
     void *FaceHandle() const { return m_faceA; } // Latin face
-    void *FaceHandleFor(unsigned int codepoint) const
-    {
-        return (UsesCJKFace(RenderCodepoint(codepoint)) && m_faceB) ? m_faceB : m_faceA;
-    }
+    void *FaceHandleFor(unsigned int codepoint) const;
 
     // gameAdvance: explicit integer compatibility advance (native or scaled).
     // Pass -1 for the vector font's natural advance (Metrics=vector or row
@@ -112,7 +113,8 @@ class GlyphSource
 
   private:
     bool UsesCJKFace(unsigned int codepoint) const;
-    void *OpenFace(int pixelSize, const char *path = NULL);
+    bool UsesSymbolFace(unsigned int codepoint) const;
+    void *OpenFace(int pixelSize, const char *path, int weight);
     void CloseFace(void **face);
     void ClearCache();
 
@@ -130,8 +132,10 @@ class GlyphSource
     void *m_lib;   // FT_Library
     void *m_faceA; // Latin / default size
     void *m_faceB; // CJK face (NULL when font and size match Latin)
+    void *m_faceSymbol = nullptr;
+    int m_sizeSymbol = 13;
     int m_sizeLatin;
-    int m_sizeCJK;
+    int m_sizeMain;
     unsigned int m_cjkFrom;
     int m_stride;
     int m_lines;
@@ -144,7 +148,10 @@ class GlyphSource
     int m_darkErr[3];
     const char *m_path;
     char m_latinPath[MAX_PATH];
+    char m_symbolPath[MAX_PATH] = {};
     int m_weight;
+    int m_weightLatin = 400;
+    int m_weightSymbol = 400;
 
     CRITICAL_SECTION m_cs;
     bool m_csInit;
@@ -152,6 +159,7 @@ class GlyphSource
     std::map<unsigned long long, GlyphRaster2> m_highCache;
     void *m_highA = nullptr;
     void *m_highB = nullptr;
+    void *m_highSymbol = nullptr;
     bool m_highResolution = false;
     int m_highScale = 2;
     bool m_legacy1252 = false;

@@ -59,7 +59,7 @@ bool NaturalGlyph(LineGlyph &item, unsigned int previous, const LineGlyph *prior
     const unsigned int renderCp = g_src.RenderCodepoint(item.cp);
     if (CompactMark(renderCp))
     {
-        const int halfQ = Cfg::FontSizeCJK() * 2 * scale1024 / 1024;
+        const int halfQ = Cfg::FontSize() * 2 * scale1024 / 1024;
         const int inkQ = cell->inkRightQ - cell->inkLeftQ;
         advanceQ = halfQ > inkQ + 2 ? halfQ : inkQ + 2;
         const int leftQ = OpeningMark(renderCp) ? advanceQ - 1 - inkQ : 1;
@@ -70,7 +70,7 @@ bool NaturalGlyph(LineGlyph &item, unsigned int previous, const LineGlyph *prior
     if (prior && MixedBoundary(g_src.RenderCodepoint(previous), renderCp))
     {
         const int inkGapQ = penQ + item.leftQ - prior->penQ - prior->rightQ;
-        const int extraQ = Cfg::FontSizeCJK() * scale1024 / 1024 - inkGapQ;
+        const int extraQ = Cfg::FontSize() * scale1024 / 1024 - inkGapQ;
         if (extraQ > 0)
         {
             penQ += extraQ;

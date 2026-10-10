@@ -97,6 +97,16 @@ void BooleanOptions(Ini &ini)
 }
 void NumberOptions(Ini &ini)
 {
+    ini.Set("FontSizeCJK", "27"); vt::config::ReadConfig();
+    Check(vt::Cfg::FontSize() == 16, "removed FontSizeCJK key is ignored");
+    ini.Set("FontSize", "18"); ini.Set("FontWeight", "600");
+    ini.Set("FontWeightLatin", "300"); ini.Set("FontWeightSymbol", "800"); vt::config::ReadConfig();
+    Check(vt::Cfg::FontSize() == 18 && vt::Cfg::FontWeight() == 600 &&
+          vt::Cfg::FontWeightLatin() == 300 && vt::Cfg::FontWeightSymbol() == 800,
+          "main font size and all three weights read independently");
+    ini.Set("FontWeightLatin", "bad"); ini.Set("FontWeightSymbol", nullptr); vt::config::ReadConfig();
+    Check(vt::Cfg::FontWeight() == 600 && vt::Cfg::FontWeightLatin() == 400 && vt::Cfg::FontWeightSymbol() == 400,
+          "missing or invalid independent weights default to 400 rather than main weight");
     struct FlushCase { const char *text; DWORD expected; };
     for (auto test : {FlushCase{nullptr, 2000}, {"", 2000}, {"invalid", 2000}, {"-1", 250}, {"0", 250},
                      {"249", 250}, {"250", 250}, {" +3000 ", 3000}, {"0xFA", 250},
@@ -111,11 +121,11 @@ void NumberOptions(Ini &ini)
     ini.Set("FlushIntervalMs", longNumber.c_str()); vt::config::ReadConfig();
     Check(vt::config::g_flushMs == 2000, "truncated number cannot masquerade as a valid prefix");
     ini.Set("MaxUniqueStrings", "-1"); ini.Set("BaselineRow", "999"); ini.Set("Supersample", "-5");
-    ini.Set("FontSizeLatin", "1"); ini.Set("FontSizeCJK", "5"); ini.Set("Outline", "999");
+    ini.Set("FontSizeLatin", "1"); ini.Set("FontSize", "5"); ini.Set("FontSizeSymbol", "2"); ini.Set("Outline", "999");
     ini.Set("OutlineColor", "0x1234"); ini.Set("Gamma", "nan"); ini.Set("AdvanceScale", "inf");
     ini.Set("Metrics", "scaled"); vt::config::ReadConfig();
     Check(vt::config::g_maxUnique == 16 && vt::Cfg::BaselineRow() == 32 && vt::Cfg::Supersample() == 1 &&
-          vt::Cfg::FontSizeLatin() == 6 && vt::Cfg::FontSizeCJK() == 6 && vt::Cfg::Outline() == 2,
+          vt::Cfg::FontSizeLatin() == 6 && vt::Cfg::FontSize() == 6 && vt::Cfg::FontSizeSymbol() == 6 && vt::Cfg::Outline() == 2,
           "cached numeric ranges share their bounded signed policy");
     Check(vt::Cfg::OutlineColor() == 0x1234 && vt::Cfg::Gamma() == 1.0 && vt::Cfg::AdvanceScale() == 1.05,
           "color and non-finite real policies reach cached getters");

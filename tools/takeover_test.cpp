@@ -158,7 +158,7 @@ static void WriteIni(int aa)
     if (!f) return;
     fprintf(f, "[VectorText]\nEnabled=1\nMode=draw\nAntiAlias=%d\n"
                "FontFile=C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf\n"
-               "FontWeight=400\nFontSizeLatin=13\nFontSizeCJK=16\nBaselineRow=13\nFitToAdvance=1\n",
+               "FontWeight=400\nFontSizeLatin=13\nFontSize=16\nBaselineRow=13\nFitToAdvance=1\n",
             aa ? 1 : 0);
     fclose(f);
 }

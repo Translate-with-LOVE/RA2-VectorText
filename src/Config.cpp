@@ -20,8 +20,11 @@ char g_logName[MAX_PATH] = "VectorText.log";
 int g_cfgMode = Cfg::Mode_Observe;
 char g_cfgFont[MAX_PATH] = "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf";
 int g_cfgWeight = parsing::weight.defaultValue;
+int g_cfgWeightLatin = parsing::latinWeight.defaultValue;
+int g_cfgWeightSymbol = parsing::symbolWeight.defaultValue;
 int g_cfgSizeLatin = parsing::latinSize.defaultValue;
-int g_cfgSizeCJK = parsing::cjkSize.defaultValue;
+int g_cfgSizeSymbol = parsing::symbolSize.defaultValue;
+int g_cfgSize = parsing::fontSize.defaultValue;
 int g_cfgBaseline = parsing::baseline.defaultValue;
 bool g_cfgFit = true;
 bool g_cfgAA = true;
@@ -108,8 +111,11 @@ void ReadConfig()
     GetPrivateProfileStringA("VectorText", "FontFile", "C:\\Windows\\Fonts\\NotoSerifSC-VF.ttf", g_cfgFont, MAX_PATH,
                              ini);
     g_cfgWeight = ReadNumber(ini, parsing::weight);
+    g_cfgWeightLatin = ReadNumber(ini, parsing::latinWeight);
+    g_cfgWeightSymbol = ReadNumber(ini, parsing::symbolWeight);
     g_cfgSizeLatin = ReadNumber(ini, parsing::latinSize);
-    g_cfgSizeCJK = ReadNumber(ini, parsing::cjkSize);
+    g_cfgSizeSymbol = ReadNumber(ini, parsing::symbolSize);
+    g_cfgSize = ReadNumber(ini, parsing::fontSize);
     g_cfgBaseline = ReadNumber(ini, parsing::baseline);
     g_cfgFit = ReadBool(ini, "FitToAdvance", true);
     g_cfgAA = ReadBool(ini, "AntiAlias", true);
@@ -169,10 +175,25 @@ int FontSizeLatin()
     Load();
     return g_cfgSizeLatin;
 }
-int FontSizeCJK()
+int FontWeightLatin()
 {
     Load();
-    return g_cfgSizeCJK;
+    return g_cfgWeightLatin;
+}
+int FontWeightSymbol()
+{
+    Load();
+    return g_cfgWeightSymbol;
+}
+int FontSize()
+{
+    Load();
+    return g_cfgSize;
+}
+int FontSizeSymbol()
+{
+    Load();
+    return g_cfgSizeSymbol;
 }
 int BaselineRow()
 {
