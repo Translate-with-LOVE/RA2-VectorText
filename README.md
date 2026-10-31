@@ -107,7 +107,7 @@ D3D9 的一次性启动图在首次呈现时直接建立高清文字图集，GDI
 | --- | --- | --- |
 | `Enabled` | `true` | 控制日志和 32 位呈现启动。关闭全部矢量接管应使用 `Mode=off`，仅设为 `false` 不会关闭 RGB565 绘制。 |
 | `Mode` | `observe` | `off` 使用原生文字；`observe` 仅观测；`draw` 矢量绘制。不区分大小写，未知值按 `observe` 处理。 |
-| `LineRender` | `false` | 单行自然排版，统一计算字距、kerning 和标点间距。需 `Mode=draw`，且不能使用 `Metrics=vector` 或大于 1 的 `AdvanceScale`；关闭时逐字绘制。 |
+| `LineRender` | `true` | 单行自然排版，统一计算字距、kerning 和标点间距。需 `Mode=draw`，且不能使用 `Metrics=vector` 或大于 1 的 `AdvanceScale`；关闭时逐字绘制。 |
 | `MixedScriptCenter` | `true` | 自然单行中，中英文混排时按英文大写高度与中文字面居中英文整段。所有英文共用同一基线偏移，保留字体自身的上标和下伸笔画；纯英文和纯中文行不移动。 |
 | `LegacyCodepage1252` | `true` | 将 `U+0080～U+009F` 中 27 个旧码位按 Windows-1252 映射为 Unicode 字形；`false` 严格按原始 Unicode 解释。不修改 CSF 或正确的 Unicode 字符。 |
 | `Present32` | `true` | 检测 cnc-ddraw，在 BGRA8 呈现阶段合成文字，提高抗锯齿边缘的颜色精度。关闭、无 cnc-ddraw 或接入失败时使用 RGB565。 |

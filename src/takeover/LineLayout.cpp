@@ -141,7 +141,7 @@ static LONG g_lineLogged = 0, g_lineRejected = 0, g_bitmapLineLogged = 0;
 } // namespace
 bool LineEnabled()
 {
-    static const bool requested = Cfg::ConfigBool("LineRender", false);
+    static const bool requested = Cfg::ConfigBool("LineRender", true);
     return requested && Cfg::Mode() == Cfg::Mode_Draw && !Cfg::VectorMetrics() && Cfg::AdvanceScale() <= 1.0;
 }
 

@@ -13,13 +13,13 @@ static int CheckConfigEncoding(const char* mode)
     FILE* ini = fopen("VectorText.ini","w");
     if (!ini) return 2;
     fprintf(ini,"[VectorText]\nEnabled=%s\nDetailed=%s\nLogBitFontBlitDetails=%s\n"
-        "Mode=draw\nFitToAdvance=%s\nAntiAlias=%s\nProbe=%s\n"
-        "LinearBlend=%s\nDither=%s\nLineRender=%s\nDynamicTextWidth=%s\nPresent32=%s\nSubpixel=%s\n"
+        "Mode=draw\nMetrics=game\nAdvanceScale=1.0\nFitToAdvance=%s\nAntiAlias=%s\nProbe=%s\n"
+        "LinearBlend=%s\nDither=%s\nDynamicTextWidth=%s\nPresent32=%s\nSubpixel=%s\n"
         "FontFile=C:\\Windows\\Fonts\\NotoSansSC-VF.ttf\nFontFileLatin=C:\\Windows\\Fonts\\arial.ttf\n"
         "FontSizeLatin=13\nFontSize=16\nSupersample=1\n"
         "BoolYes=YeS\nBoolOff=oFf\nBoolOne=1\nBoolZero=0\nBoolInvalid=not-a-bool\n",
-        value,value,value,value,value,value,value,value,value,value,value,value);
-    if (!missing) fprintf(ini,"LegacyCodepage1252=%s\nHiDPI=%s\n",value,value);
+        value,value,value,value,value,value,value,value,value,value,value);
+    if (!missing) fprintf(ini,"LineRender=%s\nLegacyCodepage1252=%s\nHiDPI=%s\n",value,value,value);
     fclose(ini);
     const bool enabled = !disabled;
     CHECK(vt::Cfg::FitToAdvance()==enabled && vt::Cfg::AntiAlias()==enabled &&
@@ -34,6 +34,8 @@ static int CheckConfigEncoding(const char* mode)
           vt::Cfg::ConfigBool("Subpixel",true)==enabled &&
           vt::Cfg::ConfigBool("DynamicTextWidth",true)==enabled &&
           vt::Cfg::ConfigBool("LineRender",true)==enabled,"runtime flags use the same boolean parser");
+    CHECK(vt::Takeover::LineEnabled()==enabled,
+          "line rendering defaults on for absent/invalid settings and honors explicit false");
     CHECK(vt::Cfg::ConfigBool("BoolYes",false) && !vt::Cfg::ConfigBool("BoolOff",true) &&
           vt::Cfg::ConfigBool("BoolOne",false) && !vt::Cfg::ConfigBool("BoolZero",true) &&
           vt::Cfg::ConfigBool("BoolInvalid",true) && !vt::Cfg::ConfigBool("BoolInvalid",false) &&
