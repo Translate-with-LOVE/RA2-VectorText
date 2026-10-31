@@ -17,6 +17,12 @@ tooltip、任务消息和侧栏“就绪”等状态标签的背景高度按实�
 
 配置、实现边界、hook 约定及验证方法见 [最终渲染说明](docs/rendering.md)。
 
+## 效果展示
+
+下图使用 **华文彩云** 字体，是字体渲染的极端案例。
+
+![华文彩云字体渲染效果（极端案例）](docs/images/stcaiyun-extreme-case.png)
+
 ## 构建与安装
 
 需要 MSVC **14.44（VS 2022）x86/x64 工具集**、CMake 3.21+、Ninja，以及 FreeType、MinHook 两个 submodule 的源码。
